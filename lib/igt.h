@@ -47,4 +47,8 @@
 #include "media_spin.h"
 #include "rendercopy.h"
 
+#ifdef HAVE_CHAMELIUM
+#include "igt_chamelium.h"
+#endif
+
 #endif /* IGT_H */
