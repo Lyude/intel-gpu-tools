@@ -30,6 +30,7 @@
 #include "igt_aux.h"
 #include "igt_core.h"
 #include "igt_core.h"
+#include "igt_chamelium.h"
 #include "igt_debugfs.h"
 #include "igt_draw.h"
 #include "igt_fb.h"

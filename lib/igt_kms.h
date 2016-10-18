@@ -31,6 +31,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
+#ifdef HAVE_CHAMELIUM
+#include <libudev.h>
+#endif
 
 #include <xf86drmMode.h>
 
@@ -333,6 +336,7 @@ igt_plane_t *igt_output_get_plane(igt_output_t *output, enum igt_plane plane);
 bool igt_pipe_get_property(igt_pipe_t *pipe, const char *name,
 			   uint32_t *prop_id, uint64_t *value,
 			   drmModePropertyPtr *prop);
+void igt_output_get_edid(igt_output_t *output, unsigned char *edid_out);
 
 static inline bool igt_plane_supports_rotation(igt_plane_t *plane)
 {
@@ -478,6 +482,13 @@ uint32_t kmstest_get_vbl_flag(uint32_t pipe_id);
 #define EDID_LENGTH 128
 const unsigned char* igt_kms_get_base_edid(void);
 const unsigned char* igt_kms_get_alt_edid(void);
+bool igt_compare_output_edid(igt_output_t *output, const unsigned char *edid);
 
+#ifdef HAVE_CHAMELIUM
+void igt_watch_hotplug(void);
+bool igt_hotplug_detected(int timeout_secs);
+void igt_flush_hotplugs(void);
+void igt_cleanup_hotplug(void);
+#endif
 
 #endif /* __IGT_KMS_H__ */

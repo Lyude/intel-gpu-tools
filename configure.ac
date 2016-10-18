@@ -259,6 +259,18 @@ if test "x$with_libunwind" = xyes; then
 			  AC_MSG_ERROR([libunwind not found. Use --without-libunwind to disable libunwind support.]))
 fi
 
+# enable support for using the chamelium
+AC_ARG_ENABLE(chamelium,
+	      AS_HELP_STRING([--without-chamelium],
+			     [Build tests without chamelium support]),
+	      [], [with_chamelium=yes])
+
+AM_CONDITIONAL(HAVE_CHAMELIUM, [test "x$with_chamelium" = xyes])
+if test "x$with_chamelium" = xyes; then
+	AC_DEFINE(HAVE_CHAMELIUM, 1, [chamelium suport])
+	PKG_CHECK_MODULES(XMLRPC, xmlrpc_client)
+fi
+
 # enable debug symbols
 AC_ARG_ENABLE(debug,
 	      AS_HELP_STRING([--disable-debug],
@@ -356,6 +368,7 @@ echo "       Assembler          : ${enable_assembler}"
 echo "       Debugger           : ${enable_debugger}"
 echo "       Overlay            : X: ${enable_overlay_xlib}, Xv: ${enable_overlay_xvlib}"
 echo "       x86-specific tools : ${build_x86}"
+echo "       Chamelium support  : ${with_chamelium}"
 echo ""
 echo " • API-Documentation      : ${enable_gtk_doc}"
 echo " • Fail on warnings       : ${enable_werror}"
