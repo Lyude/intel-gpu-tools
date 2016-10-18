@@ -169,6 +169,10 @@ if test x"$udev" = xyes; then
 fi
 PKG_CHECK_MODULES(GLIB, glib-2.0)
 
+# for chamelium
+PKG_CHECK_MODULES(XMLRPC, xmlrpc_client)
+PKG_CHECK_MODULES(PIXMAN, pixman-1)
+
 # -----------------------------------------------------------------------------
 #			Configuration options
 # -----------------------------------------------------------------------------
