@@ -78,8 +78,14 @@ lib_source_list =	 	\
 	igt_dummyload.c		\
 	igt_dummyload.h		\
 	uwildmat/uwildmat.h	\
-	uwildmat/uwildmat.c	\
-	$(NULL)
+	uwildmat/uwildmat.c
+
+if HAVE_CHAMELIUM
+lib_source_list += igt_chamelium.h \
+		   igt_chamelium.c
+endif
+
+lib_source_list += $(NULL)
 
 .PHONY: version.h.tmp
 
