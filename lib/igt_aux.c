@@ -738,6 +738,27 @@ static uint32_t get_supported_suspend_states(int power_dir)
 }
 
 /**
+ * igt_skip_without_suspend_state:
+ * @state: an #igt_suspend_state to check for
+ *
+ * Check whether or not the system supports the given @state, and skip the
+ * current test if it doesn't. Useful for tests we want to skip before
+ * attempting to call #igt_system_suspend_autoresume.
+ */
+void igt_skip_without_suspend_support(enum igt_suspend_state state,
+				      enum igt_suspend_test test)
+{
+	int power_dir;
+
+	igt_require((power_dir = open("/sys/power", O_RDONLY)) >= 0);
+	igt_require(get_supported_suspend_states(power_dir) & (1 << state));
+	igt_require(test == SUSPEND_TEST_NONE ||
+		    faccessat(power_dir, "pm_test", R_OK | W_OK, 0) == 0);
+
+	close(power_dir);
+}
+
+/**
  * igt_system_suspend_autoresume:
  * @state: an #igt_suspend_state, the target suspend state
  * @test: an #igt_suspend_test, test point at which to complete the suspend
