@@ -185,6 +185,7 @@ void igt_skip_without_suspend_support(enum igt_suspend_state state,
 				      enum igt_suspend_test test);
 void igt_system_suspend_autoresume(enum igt_suspend_state state,
 				   enum igt_suspend_test test);
+void igt_set_autoresume_delay(int delay_secs);
 
 /* dropping priviledges */
 void igt_drop_root(void);
