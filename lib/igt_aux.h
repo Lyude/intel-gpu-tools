@@ -267,4 +267,42 @@ double igt_stop_siglatency(struct igt_mean *result);
 void igt_set_module_param(const char *name, const char *val);
 void igt_set_module_param_int(const char *name, int val);
 
+/*
+ * This list data structure is a verbatim copy from wayland-util.h from the
+ * Wayland project; except that wl_ prefix has been removed.
+ */
+
+struct igt_list {
+	struct igt_list *prev;
+	struct igt_list *next;
+};
+
+void igt_list_init(struct igt_list *list);
+void igt_list_insert(struct igt_list *list, struct igt_list *elm);
+void igt_list_remove(struct igt_list *elm);
+bool igt_list_empty(const struct igt_list *list);
+
+#ifdef __GNUC__
+#define container_of(ptr, sample, member)				\
+	(__typeof__(sample))((char *)(ptr)	-			\
+		 ((char *)&(sample)->member - (char *)(sample)))
+#else
+#define container_of(ptr, sample, member)				\
+	(void *)((char *)(ptr)	-				        \
+		 ((char *)&(sample)->member - (char *)(sample)))
+#endif
+
+#define igt_list_for_each(pos, head, member)				\
+	for (pos = 0, pos = container_of((head)->next, pos, member);	\
+	     &pos->member != (head);					\
+	     pos = container_of(pos->member.next, pos, member))
+
+#define igt_list_for_each_safe(pos, tmp, head, member)			\
+	for (pos = 0, tmp = 0, 						\
+	     pos = container_of((head)->next, pos, member),		\
+	     tmp = container_of((pos)->member.next, tmp, member);	\
+	     &pos->member != (head);					\
+	     pos = tmp,							\
+	     tmp = container_of(pos->member.next, tmp, member))
+
 #endif /* IGT_AUX_H */

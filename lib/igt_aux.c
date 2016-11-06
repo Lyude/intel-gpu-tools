@@ -1343,3 +1343,30 @@ double igt_stop_siglatency(struct igt_mean *result)
 
 	return mean;
 }
+
+void igt_list_init(struct igt_list *igt_list)
+{
+	igt_list->prev = igt_list;
+	igt_list->next = igt_list;
+}
+
+void igt_list_insert(struct igt_list *igt_list, struct igt_list *elm)
+{
+	elm->prev = igt_list;
+	elm->next = igt_list->next;
+	igt_list->next = elm;
+	elm->next->prev = elm;
+}
+
+void igt_list_remove(struct igt_list *elm)
+{
+	elm->prev->next = elm->next;
+	elm->next->prev = elm->prev;
+	elm->next = NULL;
+	elm->prev = NULL;
+}
+
+bool igt_list_empty(const struct igt_list *igt_list)
+{
+	return igt_list->next == igt_list;
+}
