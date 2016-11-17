@@ -479,5 +479,11 @@ uint32_t kmstest_get_vbl_flag(uint32_t pipe_id);
 const unsigned char* igt_kms_get_base_edid(void);
 const unsigned char* igt_kms_get_alt_edid(void);
 
+#ifdef HAVE_UDEV
+void igt_watch_hotplug(void);
+bool igt_hotplug_detected(int timeout_secs);
+void igt_flush_hotplugs(void);
+void igt_cleanup_hotplug(void);
+#endif
 
 #endif /* __IGT_KMS_H__ */
