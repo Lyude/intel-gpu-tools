@@ -38,6 +38,10 @@
 #elif HAVE_SYS_KD_H
 #include <sys/kd.h>
 #endif
+#ifdef HAVE_UDEV
+#include <libudev.h>
+#include <poll.h>
+#endif
 #include <errno.h>
 #include <time.h>
 
@@ -2755,6 +2759,110 @@ void igt_reset_connectors(void)
 			      forced_connectors[i],
 			      "detect");
 }
+
+#ifdef HAVE_UDEV
+static struct udev_monitor *hotplug_mon;
+
+/**
+ * igt_watch_hotplug:
+ *
+ * Begin monitoring udev for hotplug events.
+ */
+void igt_watch_hotplug(void)
+{
+	struct udev *udev;
+	int ret, flags, fd;
+
+	if (hotplug_mon)
+		igt_cleanup_hotplug();
+
+	udev = udev_new();
+	igt_assert(udev != NULL);
+
+	hotplug_mon = udev_monitor_new_from_netlink(udev, "udev");
+	igt_assert(hotplug_mon != NULL);
+
+	ret = udev_monitor_filter_add_match_subsystem_devtype(hotplug_mon,
+							      "drm",
+							      "drm_minor");
+	igt_assert_eq(ret, 0);
+	ret = udev_monitor_filter_update(hotplug_mon);
+	igt_assert_eq(ret, 0);
+	ret = udev_monitor_enable_receiving(hotplug_mon);
+	igt_assert_eq(ret, 0);
+
+	/* Set the fd for udev as non blocking */
+	fd = udev_monitor_get_fd(hotplug_mon);
+	flags = fcntl(fd, F_GETFL, 0);
+	igt_assert(flags);
+
+	flags |= O_NONBLOCK;
+	igt_assert_neq(fcntl(fd, F_SETFL, flags), -1);
+}
+
+/**
+ * igt_hotplug_detected:
+ * @timeout_secs: How long to wait for a hotplug event to occur.
+ *
+ * Assert that a hotplug event was received since we last checked the monitor.
+ *
+ * Returns: true if a sysfs hotplug event was received, false if we timed out
+ */
+bool igt_hotplug_detected(int timeout_secs)
+{
+	struct udev_device *dev;
+	const char *hotplug_val;
+	struct pollfd fd = {
+		.fd = udev_monitor_get_fd(hotplug_mon),
+		.events = POLLIN
+	};
+	bool hotplug_received = false;
+
+	/* Go through all of the events pending on the udev monitor. Once we
+	 * receive a hotplug, we continue going through the rest of the events
+	 * so that redundant hotplug events don't change the results of future
+	 * checks
+	 */
+	while (!hotplug_received && poll(&fd, 1, timeout_secs * 1000)) {
+		dev = udev_monitor_receive_device(hotplug_mon);
+
+		hotplug_val = udev_device_get_property_value(dev, "HOTPLUG");
+		if (hotplug_val && atoi(hotplug_val) == 1)
+			hotplug_received = true;
+
+		udev_device_unref(dev);
+	}
+
+	return hotplug_received;
+}
+
+/**
+ * igt_flush_hotplugs:
+ *
+ * Get rid of any pending hotplug events
+ */
+void igt_flush_hotplugs(void)
+{
+	struct udev_device *dev;
+
+	while ((dev = udev_monitor_receive_device(hotplug_mon)))
+		udev_device_unref(dev);
+}
+
+/**
+ * igt_cleanup_hotplug:
+ *
+ * Cleanup the resources allocated by #igt_watch_hotplug
+ */
+void igt_cleanup_hotplug(void)
+{
+	struct udev *udev = udev_monitor_get_udev(hotplug_mon);
+
+	udev_monitor_unref(hotplug_mon);
+	hotplug_mon = NULL;
+	udev_unref(udev);
+}
+#endif
 
 /**
  * kmstest_get_vbl_flag:
