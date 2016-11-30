@@ -290,11 +290,18 @@ void igt_assert_crc_equal(igt_crc_t *a, igt_crc_t *b)
 char *igt_crc_to_string(igt_crc_t *crc)
 {
 	char buf[128];
+	char *p;
+	int i, len;
 
-	igt_assert_eq(crc->n_words, 5);
+	for (i = 0, p = buf;
+	     i < crc->n_words;
+	     i++, p += len) {
+		snprintf(p, sizeof(buf) - (p - buf), "%08x %n",
+			 crc->crc[i], &len);
+	}
 
-	sprintf(buf, "%08x %08x %08x %08x %08x", crc->crc[0],
-		crc->crc[1], crc->crc[2], crc->crc[3], crc->crc[4]);
+	/* Strip the trailing space */
+	*strrchr(buf, ' ') = '\0';
 
 	return strdup(buf);
 }
