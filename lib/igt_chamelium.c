@@ -657,7 +657,7 @@ static void chamelium_read_port_mappings(int drm_fd, GKeyFile *key_file)
 	struct chamelium_port *port;
 	GError *error = NULL;
 	char **group_list;
-	char *group;
+	char *group, *map_name;
 	size_t group_list_len;
 	int port_i, i, j;
 
@@ -673,22 +673,24 @@ static void chamelium_read_port_mappings(int drm_fd, GKeyFile *key_file)
 	for (i = 0; group_list[i] != NULL; i++) {
 		group = group_list[i];
 
-		if (strcmp(group, "Chamelium") == 0)
+		if (!strstr(group, "Chamelium:"))
 			continue;
 
+		map_name = group + (sizeof("Chamelium:") - 1);
+
 		port = &chamelium_ports[port_i++];
-		port->connector_name = strdup(group);
+		port->connector_name = strdup(map_name);
 		port->id = g_key_file_get_integer(key_file, group,
 						  "ChameliumPortID",
 						  &error);
 		igt_require_f(port->id,
 			      "Failed to read chamelium port ID for %s: %s\n",
-			      group, error->message);
+			      map_name, error->message);
 
 		port->type = chamelium_get_port_type(port->id);
 		igt_require_f(port->type != DRM_MODE_CONNECTOR_Unknown,
 			      "Unable to retrieve the physical port type from the Chamelium for '%s'\n",
-			      group);
+			      map_name);
 
 		for (j = 0;
 		     j < res->count_connectors && !port->connector_id;
@@ -703,16 +705,16 @@ static void chamelium_read_port_mappings(int drm_fd, GKeyFile *key_file)
 				 kmstest_connector_type_str(connector->connector_type),
 				 connector->connector_type_id);
 
-			if (strcmp(connector_name, group) == 0)
+			if (strcmp(connector_name, map_name) == 0)
 				port->connector_id = connector->connector_id;
 
 			drmModeFreeConnector(connector);
 		}
 		igt_assert_f(port->connector_id,
-			     "No connector found with name '%s'\n", group);
+			     "No connector found with name '%s'\n", map_name);
 
 		igt_debug("Port '%s' with physical type '%s' mapped to Chamelium port %d\n",
-			  group, kmstest_connector_type_str(port->type),
+			  map_name, kmstest_connector_type_str(port->type),
 			  port->id);
 	}
 
@@ -727,10 +729,10 @@ static void chamelium_read_config(int drm_fd)
 	char *key_file_loc;
 	int rc;
 
-	key_file_loc = getenv("CHAMELIUM_CONFIG_PATH");
+	key_file_loc = getenv("IGT_CONFIG_PATH");
 	if (!key_file_loc) {
 		igt_require(key_file_loc = alloca(100));
-		snprintf(key_file_loc, 100, "%s/.igt_chamelium_rc",
+		snprintf(key_file_loc, 100, "%s/.igtrc",
 			 g_get_home_dir());
 	}
 
