@@ -38,6 +38,7 @@
 #include "igt_kms.h"
 #include "igt_pm.h"
 #include "igt_stats.h"
+#include "igt_chamelium.h"
 #include "instdone.h"
 #include "intel_batchbuffer.h"
 #include "intel_chipset.h"
@@ -46,9 +47,5 @@
 #include "media_fill.h"
 #include "media_spin.h"
 #include "rendercopy.h"
-
-#ifdef HAVE_CHAMELIUM
-#include "igt_chamelium.h"
-#endif
 
 #endif /* IGT_H */
