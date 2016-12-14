@@ -296,7 +296,7 @@ test_hpd_without_ddc(data_t *data, const struct chamelium_port *port)
 	igt_assert(reprobe_connector(data, port) == DRM_MODE_CONNECTED);
 }
 
-#define for_each_port(p, port)                  \
+#define for_each_port(p, port)             \
 	for (p = 0, port = &data.ports[p]; \
 	     p < data.port_count;          \
 	     p++, port = &data.ports[p])   \
@@ -305,42 +305,6 @@ test_hpd_without_ddc(data_t *data, const struct chamelium_port *port)
 	igt_subtest(name__)               \
 		for_each_port(p, port)    \
 			if (port->type == DRM_MODE_CONNECTOR_ ## type__)
-
-#define define_common_connector_tests(type_str__, type__)                     \
-	connector_subtest(type_str__ "-hpd", type__)                          \
-		test_basic_hotplug(&data, port);                              \
-                                                                              \
-	connector_subtest(type_str__ "-edid-read", type__) {                  \
-		test_edid_read(&data, port, edid_id,                          \
-			       igt_kms_get_base_edid());                      \
-		test_edid_read(&data, port, alt_edid_id,                      \
-			       igt_kms_get_alt_edid());                       \
-	}                                                                     \
-                                                                              \
-	connector_subtest(type_str__ "-hpd-after-suspend", type__)            \
-		test_suspend_resume_hpd(&data, port,                          \
-					SUSPEND_STATE_MEM,                    \
-					SUSPEND_TEST_NONE);                   \
-                                                                              \
-	connector_subtest(type_str__ "-hpd-after-hibernate", type__)          \
-		test_suspend_resume_hpd(&data, port,                          \
-					SUSPEND_STATE_DISK,                   \
-					SUSPEND_TEST_DEVICES);                \
-                                                                              \
-	connector_subtest(type_str__ "-edid-change-during-suspend", type__)   \
-		test_suspend_resume_edid_change(&data, port,                  \
-						SUSPEND_STATE_MEM,            \
-						SUSPEND_TEST_NONE,            \
-						edid_id, alt_edid_id);        \
-                                                                              \
-	connector_subtest(type_str__ "-edid-change-during-hibernate", type__) \
-		test_suspend_resume_edid_change(&data, port,                  \
-						SUSPEND_STATE_DISK,           \
-						SUSPEND_TEST_DEVICES,         \
-						edid_id, alt_edid_id);        \
-                                                                              \
-	connector_subtest(type_str__ "-display", type__)                      \
-		test_display(&data, port);
 
 static data_t data;
 
@@ -374,7 +338,40 @@ igt_main
 			    &data, DRM_MODE_CONNECTOR_DisplayPort);
 		}
 
-		define_common_connector_tests("dp", DisplayPort);
+		connector_subtest("dp-hpd", DisplayPort)
+			test_basic_hotplug(&data, port);
+
+		connector_subtest("dp-edid-read", DisplayPort) {
+			test_edid_read(&data, port, edid_id,
+				       igt_kms_get_base_edid());
+			test_edid_read(&data, port, alt_edid_id,
+				       igt_kms_get_alt_edid());
+		}
+
+		connector_subtest("dp-hpd-after-suspend", DisplayPort)
+			test_suspend_resume_hpd(&data, port,
+						SUSPEND_STATE_MEM,
+						SUSPEND_TEST_NONE);
+
+		connector_subtest("dp-hpd-after-hibernate", DisplayPort)
+			test_suspend_resume_hpd(&data, port,
+						SUSPEND_STATE_DISK,
+						SUSPEND_TEST_DEVICES);
+
+		connector_subtest("dp-edid-change-during-suspend", DisplayPort)
+			test_suspend_resume_edid_change(&data, port,
+							SUSPEND_STATE_MEM,
+							SUSPEND_TEST_NONE,
+							edid_id, alt_edid_id);
+
+		connector_subtest("dp-edid-change-during-hibernate", DisplayPort)
+			test_suspend_resume_edid_change(&data, port,
+							SUSPEND_STATE_DISK,
+							SUSPEND_TEST_DEVICES,
+							edid_id, alt_edid_id);
+
+		connector_subtest("dp-display", DisplayPort)
+			test_display(&data, port);
 	}
 
 	igt_subtest_group {
@@ -383,7 +380,40 @@ igt_main
 			    &data, DRM_MODE_CONNECTOR_HDMIA);
 		}
 
-		define_common_connector_tests("hdmi", HDMIA);
+		connector_subtest("hdmi-hpd", HDMIA)
+			test_basic_hotplug(&data, port);
+
+		connector_subtest("hdmi-edid-read", HDMIA) {
+			test_edid_read(&data, port, edid_id,
+				       igt_kms_get_base_edid());
+			test_edid_read(&data, port, alt_edid_id,
+				       igt_kms_get_alt_edid());
+		}
+
+		connector_subtest("hdmi-hpd-after-suspend", HDMIA)
+			test_suspend_resume_hpd(&data, port,
+						SUSPEND_STATE_MEM,
+						SUSPEND_TEST_NONE);
+
+		connector_subtest("hdmi-hpd-after-hibernate", HDMIA)
+			test_suspend_resume_hpd(&data, port,
+						SUSPEND_STATE_DISK,
+						SUSPEND_TEST_DEVICES);
+
+		connector_subtest("hdmi-edid-change-during-suspend", HDMIA)
+			test_suspend_resume_edid_change(&data, port,
+							SUSPEND_STATE_MEM,
+							SUSPEND_TEST_NONE,
+							edid_id, alt_edid_id);
+
+		connector_subtest("hdmi-edid-change-during-hibernate", HDMIA)
+			test_suspend_resume_edid_change(&data, port,
+							SUSPEND_STATE_DISK,
+							SUSPEND_TEST_DEVICES,
+							edid_id, alt_edid_id);
+
+		connector_subtest("hdmi-display", HDMIA)
+			test_display(&data, port);
 	}
 
 	igt_subtest_group {
