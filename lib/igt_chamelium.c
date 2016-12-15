@@ -741,7 +741,7 @@ static void chamelium_read_config(struct chamelium *chamelium, int drm_fd)
 		      error->message);
 
 	chamelium->url = g_key_file_get_string(key_file, "Chamelium", "URL",
-					      &error);
+					       &error);
 	igt_require_f(chamelium->url,
 		      "Couldn't read chamelium URL from config file: %s\n",
 		      error->message);
