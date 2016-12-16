@@ -31,46 +31,58 @@
 #include <stdbool.h>
 
 struct chamelium;
-
-struct chamelium_port {
-	unsigned int type;
-	int id;
-	int connector_id;
-	char *connector_name;
-};
+struct chamelium_port;
 
 struct chamelium *chamelium_init(int drm_fd);
 void chamelium_deinit(struct chamelium *chamelium);
 void chamelium_reset(struct chamelium *chamelium);
-const struct chamelium_port *chamelium_get_ports(struct chamelium *chamelium,
-						 int *count);
 
-void chamelium_plug(struct chamelium *chamelium, int id);
-void chamelium_unplug(struct chamelium *chamelium, int id);
-bool chamelium_is_plugged(struct chamelium *chamelium, int id);
-bool chamelium_port_wait_video_input_stable(struct chamelium *chamelium, int id,
+struct chamelium_port **chamelium_get_ports(struct chamelium *chamelium,
+					    int *count);
+unsigned int chamelium_port_get_type(const struct chamelium_port *port);
+drmModeConnector *chamelium_port_get_connector(struct chamelium *chamelium,
+					       struct chamelium_port *port,
+					       bool reprobe);
+const char *chamelium_port_get_name(struct chamelium_port *port);
+
+void chamelium_plug(struct chamelium *chamelium, struct chamelium_port *port);
+void chamelium_unplug(struct chamelium *chamelium, struct chamelium_port *port);
+bool chamelium_is_plugged(struct chamelium *chamelium,
+			  struct chamelium_port *port);
+bool chamelium_port_wait_video_input_stable(struct chamelium *chamelium,
+					    struct chamelium_port *port,
 					    int timeout_secs);
-void chamelium_fire_mixed_hpd_pulses(struct chamelium *chamelium, int id, ...);
-void chamelium_fire_hpd_pulses(struct chamelium *chamelium, int id,
+void chamelium_fire_mixed_hpd_pulses(struct chamelium *chamelium,
+				     struct chamelium_port *port, ...);
+void chamelium_fire_hpd_pulses(struct chamelium *chamelium,
+			       struct chamelium_port *port,
 			       int width_msec, int count);
-void chamelium_async_hpd_pulse_start(struct chamelium *chamelium, int id,
+void chamelium_async_hpd_pulse_start(struct chamelium *chamelium,
+				     struct chamelium_port *port,
 				     bool high, int delay_secs);
 void chamelium_async_hpd_pulse_finish(struct chamelium *chamelium);
 int chamelium_new_edid(struct chamelium *chamelium, const unsigned char *edid);
-void chamelium_port_set_edid(struct chamelium *chamelium, int id, int edid_id);
-bool chamelium_port_get_ddc_state(struct chamelium *chamelium, int id);
-void chamelium_port_set_ddc_state(struct chamelium *chamelium, int id,
+void chamelium_port_set_edid(struct chamelium *chamelium,
+			     struct chamelium_port *port, int edid_id);
+bool chamelium_port_get_ddc_state(struct chamelium *chamelium,
+				  struct chamelium_port *port);
+void chamelium_port_set_ddc_state(struct chamelium *chamelium,
+				  struct chamelium_port *port,
 				  bool enabled);
-void chamelium_port_get_resolution(struct chamelium *chamelium, int id,
+void chamelium_port_get_resolution(struct chamelium *chamelium,
+				   struct chamelium_port *port,
 				   int *x, int *y);
-igt_crc_t *chamelium_get_crc_for_area(struct chamelium *chamelium, int id,
+igt_crc_t *chamelium_get_crc_for_area(struct chamelium *chamelium,
+				      struct chamelium_port *port,
 				      int x, int y, int w, int h);
-void chamelium_start_capture(struct chamelium *chamelium, int id,
+void chamelium_start_capture(struct chamelium *chamelium,
+			     struct chamelium_port *port,
 			     int x, int y, int w, int h);
 void chamelium_stop_capture(struct chamelium *chamelium, int frame_count);
 igt_crc_t *chamelium_read_captured_crcs(struct chamelium *chamelium,
 					int *frame_count);
-int chamelium_get_frame_limit(struct chamelium *chamelium, int id,
+int chamelium_get_frame_limit(struct chamelium *chamelium,
+			      struct chamelium_port *port,
 			      int w, int h);
 
 #endif /* IGT_CHAMELIUM_H */

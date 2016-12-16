@@ -33,7 +33,7 @@
 typedef struct {
 	int drm_fd;
 	struct chamelium *chamelium;
-	const struct chamelium_port *ports;
+	struct chamelium_port **ports;
 	int port_count;
 } data_t;
 
@@ -46,7 +46,7 @@ require_connector_present(data_t *data, unsigned int type)
 	bool found = false;
 
 	for (i = 0; i < data->port_count && !found; i++) {
-		if (data->ports[i].type == type)
+		if (chamelium_port_get_type(data->ports[i]) == type)
 			found = true;
 	}
 
@@ -55,13 +55,13 @@ require_connector_present(data_t *data, unsigned int type)
 }
 
 static drmModeConnection
-reprobe_connector(data_t *data, const struct chamelium_port *port)
+reprobe_connector(data_t *data, struct chamelium_port *port)
 {
 	drmModeConnector *connector;
 	drmModeConnection status;
 
-	igt_debug("Reprobing %s...\n", port->connector_name);
-	connector = drmModeGetConnector(data->drm_fd, port->connector_id);
+	igt_debug("Reprobing %s...\n", chamelium_port_get_name(port));
+	connector = chamelium_port_get_connector(data->chamelium, port, true);
 	igt_assert(connector);
 	status = connector->connection;
 
@@ -70,12 +70,13 @@ reprobe_connector(data_t *data, const struct chamelium_port *port)
 }
 
 static void
-wait_for_connector(data_t *data, const struct chamelium_port *port,
+wait_for_connector(data_t *data, struct chamelium_port *port,
 		   drmModeConnection status)
 {
 	bool finished = false;
 
-	igt_debug("Waiting for %s to %sconnect...\n", port->connector_name,
+	igt_debug("Waiting for %s to %sconnect...\n",
+		  chamelium_port_get_name(port),
 		  status == DRM_MODE_DISCONNECTED ? "dis" : "");
 
 	/*
@@ -95,7 +96,7 @@ wait_for_connector(data_t *data, const struct chamelium_port *port,
 }
 
 static void
-reset_state(data_t *data, const struct chamelium_port *port)
+reset_state(data_t *data, struct chamelium_port *port)
 {
 	igt_reset_connectors();
 	chamelium_reset(data->chamelium);
@@ -103,7 +104,7 @@ reset_state(data_t *data, const struct chamelium_port *port)
 }
 
 static void
-test_basic_hotplug(data_t *data, const struct chamelium_port *port)
+test_basic_hotplug(data_t *data, struct chamelium_port *port)
 {
 	int i;
 
@@ -115,14 +116,14 @@ test_basic_hotplug(data_t *data, const struct chamelium_port *port)
 		igt_flush_hotplugs();
 
 		/* Check if we get a sysfs hotplug event */
-		chamelium_plug(data->chamelium, port->id);
+		chamelium_plug(data->chamelium, port);
 		igt_assert(igt_hotplug_detected(HOTPLUG_TIMEOUT));
 		igt_assert(reprobe_connector(data, port) == DRM_MODE_CONNECTED);
 
 		igt_flush_hotplugs();
 
 		/* Now check if we get a hotplug from disconnection */
-		chamelium_unplug(data->chamelium, port->id);
+		chamelium_unplug(data->chamelium, port);
 		igt_assert(igt_hotplug_detected(HOTPLUG_TIMEOUT));
 		igt_assert(reprobe_connector(data, port) ==
 			   DRM_MODE_DISCONNECTED);
@@ -133,19 +134,21 @@ test_basic_hotplug(data_t *data, const struct chamelium_port *port)
 }
 
 static void
-test_edid_read(data_t *data, const struct chamelium_port *port,
+test_edid_read(data_t *data, struct chamelium_port *port,
 	       int edid_id, const unsigned char *edid)
 {
 	drmModePropertyBlobPtr edid_blob = NULL;
+	drmModeConnector *connector = chamelium_port_get_connector(
+	    data->chamelium, port, false);
 	uint64_t edid_blob_id;
 
 	reset_state(data, port);
 
-	chamelium_port_set_edid(data->chamelium, port->id, edid_id);
-	chamelium_plug(data->chamelium, port->id);
+	chamelium_port_set_edid(data->chamelium, port, edid_id);
+	chamelium_plug(data->chamelium, port);
 	wait_for_connector(data, port, DRM_MODE_CONNECTED);
 
-	igt_assert(kmstest_get_property(data->drm_fd, port->connector_id,
+	igt_assert(kmstest_get_property(data->drm_fd, connector->connector_id,
 					DRM_MODE_OBJECT_CONNECTOR, "EDID", NULL,
 					&edid_blob_id, NULL));
 	igt_assert(edid_blob = drmModeGetPropertyBlob(data->drm_fd,
@@ -155,10 +158,11 @@ test_edid_read(data_t *data, const struct chamelium_port *port,
 	igt_assert(memcmp(edid, edid_blob->data, EDID_LENGTH) == 0);
 
 	drmModeFreePropertyBlob(edid_blob);
+	drmModeFreeConnector(connector);
 }
 
 static void
-test_suspend_resume_hpd(data_t *data, const struct chamelium_port *port,
+test_suspend_resume_hpd(data_t *data, struct chamelium_port *port,
 			enum igt_suspend_state state,
 			enum igt_suspend_test test)
 {
@@ -171,7 +175,7 @@ test_suspend_resume_hpd(data_t *data, const struct chamelium_port *port,
 	igt_set_autoresume_delay(15);
 
 	/* Make sure we notice new connectors after resuming */
-	chamelium_async_hpd_pulse_start(data->chamelium, port->id, false, delay);
+	chamelium_async_hpd_pulse_start(data->chamelium, port, false, delay);
 	igt_system_suspend_autoresume(state, test);
 	chamelium_async_hpd_pulse_finish(data->chamelium);
 
@@ -181,7 +185,7 @@ test_suspend_resume_hpd(data_t *data, const struct chamelium_port *port,
 	igt_flush_hotplugs();
 
 	/* Now make sure we notice disconnected connectors after resuming */
-	chamelium_async_hpd_pulse_start(data->chamelium, port->id, true, delay);
+	chamelium_async_hpd_pulse_start(data->chamelium, port, true, delay);
 	igt_system_suspend_autoresume(state, test);
 	chamelium_async_hpd_pulse_finish(data->chamelium);
 
@@ -190,7 +194,7 @@ test_suspend_resume_hpd(data_t *data, const struct chamelium_port *port,
 }
 
 static void
-test_suspend_resume_edid_change(data_t *data, const struct chamelium_port *port,
+test_suspend_resume_edid_change(data_t *data, struct chamelium_port *port,
 				enum igt_suspend_state state,
 				enum igt_suspend_test test,
 				int edid_id,
@@ -201,8 +205,8 @@ test_suspend_resume_edid_change(data_t *data, const struct chamelium_port *port,
 	igt_watch_hotplug();
 
 	/* First plug in the port */
-	chamelium_port_set_edid(data->chamelium, port->id, edid_id);
-	chamelium_plug(data->chamelium, port->id);
+	chamelium_port_set_edid(data->chamelium, port, edid_id);
+	chamelium_plug(data->chamelium, port);
 	wait_for_connector(data, port, DRM_MODE_CONNECTED);
 
 	igt_flush_hotplugs();
@@ -211,14 +215,14 @@ test_suspend_resume_edid_change(data_t *data, const struct chamelium_port *port,
 	 * Change the edid before we suspend. On resume, the machine should
 	 * notice the EDID change and fire a hotplug event.
 	 */
-	chamelium_port_set_edid(data->chamelium, port->id, alt_edid_id);
+	chamelium_port_set_edid(data->chamelium, port, alt_edid_id);
 
 	igt_system_suspend_autoresume(state, test);
 	igt_assert(igt_hotplug_detected(HOTPLUG_TIMEOUT));
 }
 
 static void
-test_display(data_t *data, const struct chamelium_port *port)
+test_display(data_t *data, struct chamelium_port *port)
 {
 	igt_display_t display;
 	igt_output_t *output;
@@ -232,7 +236,7 @@ test_display(data_t *data, const struct chamelium_port *port)
 
 	reset_state(data, port);
 
-	chamelium_plug(data->chamelium, port->id);
+	chamelium_plug(data->chamelium, port);
 	wait_for_connector(data, port, DRM_MODE_CONNECTED);
 	igt_assert(res = drmModeGetResources(data->drm_fd));
 	kmstest_unset_all_crtcs(data->drm_fd, res);
@@ -241,13 +245,17 @@ test_display(data_t *data, const struct chamelium_port *port)
 
 	/* Find the output struct for this connector */
 	for_each_connected_output(&display, output) {
-		if (output->config.connector->connector_id ==
-		    port->connector_id)
-			break;
-	}
+		connector = chamelium_port_get_connector(data->chamelium,
+							 port, false);
 
-	connector = drmModeGetConnectorCurrent(data->drm_fd,
-					       port->connector_id);
+		if (output->config.connector->connector_id ==
+		    connector->connector_id)
+			break;
+
+		drmModeFreeConnector(connector);
+		connector = NULL;
+	}
+	igt_assert(connector);
 
 	/* Find a spare CRTC to use for the display */
 	crtc_id = kmstest_find_crtc_for_connector(data->drm_fd, res, connector,
@@ -272,7 +280,7 @@ test_display(data_t *data, const struct chamelium_port *port)
 	igt_display_commit(&display);
 
 	igt_assert(chamelium_port_wait_video_input_stable(data->chamelium,
-							  port->id,
+							  port,
 							  HOTPLUG_TIMEOUT));
 
 	drmModeFreeResources(res);
@@ -281,7 +289,7 @@ test_display(data_t *data, const struct chamelium_port *port)
 }
 
 static void
-test_hpd_without_ddc(data_t *data, const struct chamelium_port *port)
+test_hpd_without_ddc(data_t *data, struct chamelium_port *port)
 {
 	reset_state(data, port);
 	igt_watch_hotplug();
@@ -289,28 +297,29 @@ test_hpd_without_ddc(data_t *data, const struct chamelium_port *port)
 	/* Disable the DDC on the connector and make sure we still get a
 	 * hotplug
 	 */
-	chamelium_port_set_ddc_state(data->chamelium, port->id, false);
-	chamelium_plug(data->chamelium, port->id);
+	chamelium_port_set_ddc_state(data->chamelium, port, false);
+	chamelium_plug(data->chamelium, port);
 
 	igt_assert(igt_hotplug_detected(HOTPLUG_TIMEOUT));
 	igt_assert(reprobe_connector(data, port) == DRM_MODE_CONNECTED);
 }
 
-#define for_each_port(p, port)             \
-	for (p = 0, port = &data.ports[p]; \
-	     p < data.port_count;          \
-	     p++, port = &data.ports[p])   \
+#define for_each_port(p, port)            \
+	for (p = 0, port = data.ports[p]; \
+	     p < data.port_count;         \
+	     p++, port = data.ports[p])   \
 
 #define connector_subtest(name__, type__) \
 	igt_subtest(name__)               \
 		for_each_port(p, port)    \
-			if (port->type == DRM_MODE_CONNECTOR_ ## type__)
+			if (chamelium_port_get_type(port) == \
+			    DRM_MODE_CONNECTOR_ ## type__)
 
 static data_t data;
 
 igt_main
 {
-	const struct chamelium_port *port;
+	struct chamelium_port *port;
 	int edid_id, alt_edid_id, p;
 
 	igt_fixture {
