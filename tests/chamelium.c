@@ -309,9 +309,9 @@ test_hpd_without_ddc(data_t *data, struct chamelium_port *port)
 	     p < data.port_count;         \
 	     p++, port = data.ports[p])   \
 
-#define connector_subtest(name__, type__) \
-	igt_subtest(name__)               \
-		for_each_port(p, port)    \
+#define connector_subtest(name__, type__)                    \
+	igt_subtest(name__)                                  \
+		for_each_port(p, port)                       \
 			if (chamelium_port_get_type(port) == \
 			    DRM_MODE_CONNECTOR_ ## type__)
 
