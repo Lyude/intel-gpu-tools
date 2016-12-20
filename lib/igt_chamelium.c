@@ -86,6 +86,12 @@ struct chamelium_port {
 	char *name;
 };
 
+struct chamelium_frame_data {
+	int frame_count;
+	size_t frame_size;
+	unsigned char **frames;
+};
+
 struct chamelium {
 	xmlrpc_env env;
 	xmlrpc_client *client;
@@ -179,6 +185,56 @@ drmModeConnector *chamelium_port_get_connector(struct chamelium *chamelium,
 const char *chamelium_port_get_name(struct chamelium_port *port)
 {
 	return port->name;
+}
+
+/**
+ * chamelium_frame_data_get_frame_count:
+ * @data: The frame data to retrieve the frame count for
+ *
+ * Get the number of video frames contained in a pixel dump from the Chamelium.
+ *
+ * Returns: number of video frames in @data
+ */
+int chamelium_frame_data_get_frame_count(const struct chamelium_frame_data *data)
+{
+	return data->frame_count;
+}
+
+/**
+ * chamelium_free_frame_data:
+ * @data: The frame data to free
+ *
+ * Frees all of the resources being used by the given frame data structure.
+ * This function should be called to cleanup frame dumps from the chamelium
+ * once the user is done with them.
+ */
+void chamelium_free_frame_data(struct chamelium_frame_data *data)
+{
+	int i;
+
+	for (i = 0; i < data->frame_count; i++)
+		free(data->frames[i]);
+
+	free(data);
+}
+
+/**
+ * chamelium_frame_data_get_frame:
+ * @data: The frame data from the Chamelium containing the frame we want
+ * @index: The index of the frame we want to retrieve
+ * @len: Where to store the length of the frame
+ *
+ * Retrieves the raw RGB pixel data for a frame in @data. This data need not be
+ * freed.
+ *
+ * Returns: the raw RGB pixel data for the given frame
+ */
+const unsigned char *chamelium_frame_data_get_frame(const struct chamelium_frame_data *data,
+						    unsigned int index,
+						    size_t *len)
+{
+	*len = data->frame_size;
+	return data->frames[index];
 }
 
 static xmlrpc_value *chamelium_rpc(struct chamelium *chamelium,
@@ -563,6 +619,47 @@ void chamelium_port_get_resolution(struct chamelium *chamelium,
 	xmlrpc_DECREF(res);
 }
 
+/**
+ * chamelium_port_dump_pixels:
+ * @chamelium: The Chamelium instance to use
+ * @id: The ID of the port we want to dump pixels from
+ * @x: The X coordinate to crop the screen capture to
+ * @y: The Y coordinate to crop the screen capture to
+ * @w: The width of the area to crop the screen capture to, or 0 for the whole
+ * screen
+ * @h: The height of the area to crop the screen capture to, or 0 for the whole
+ * screen
+ * @len: Where to store the len of the pixel dump
+ *
+ * Captures the currently displayed image on the given chamelium port,
+ * optionally cropped to a given region. In situations where pre-calculating
+ * CRCs may not be reliable, this can be used as an alternative for figuring
+ * out whether or not the correct images are being displayed on the screen.
+ *
+ * The RGB data returned by this function should be freed when it is no longer
+ * needed.
+ *
+ * Returns: a pointer to an RGB dump of the current screen contents
+ */
+unsigned char *chamelium_port_dump_pixels(struct chamelium *chamelium,
+					  struct chamelium_port *port,
+					  int x, int y,
+					  int w, int h,
+					  size_t *len)
+{
+	xmlrpc_value *res;
+	unsigned char *ret;
+
+	res = chamelium_rpc(chamelium, "DumpPixels",
+			    (w && h) ? "(iiiii)" : "(innnn)", port->id,
+			    x, y, w, h);
+
+	xmlrpc_read_base64(&chamelium->env, res, len, (void*)&ret);
+	xmlrpc_DECREF(res);
+
+	return ret;
+}
+
 static void crc_from_xml(struct chamelium *chamelium,
 			 xmlrpc_value *xml_crc, igt_crc_t *out)
 {
@@ -652,6 +749,29 @@ void chamelium_stop_capture(struct chamelium *chamelium, int frame_count)
 }
 
 /**
+ * chamelium_capture:
+ * @chamelium: The Chamelium instance to use
+ * @id: The ID of the port for which we want to start capturing frames on
+ * @x: The X coordinate to crop the video to
+ * @y: The Y coordinate to crop the video to
+ * @w: The width of the cropped video, or %0 for the whole display
+ * @h: The height of the cropped video, or %0 for the whole display
+ * @frame_count: The number of frames to capture
+ *
+ * Captures the given number of frames on the chamelium. This is equivalent to
+ * calling #chamelium_start_capture immediately followed by
+ * #chamelium_stop_capture. The caller is blocked until all of the frames have
+ * been captured.
+ */
+void chamelium_capture(struct chamelium *chamelium, struct chamelium_port *port,
+		       int x, int y, int w, int h, int frame_count)
+{
+	xmlrpc_DECREF(chamelium_rpc(chamelium, "CaptureVideo",
+				    (w && h) ? "(iiiiii)" : "(iinnnn)",
+				    port->id, frame_count, x, y, w, h));
+}
+
+/**
  * chamelium_read_captured_crcs:
  * @chamelium: The Chamelium instance to use
  * @frame_count: Where to store the number of CRCs we read in
@@ -683,6 +803,56 @@ igt_crc_t *chamelium_read_captured_crcs(struct chamelium *chamelium,
 
 	xmlrpc_DECREF(res);
 
+	return ret;
+}
+
+/**
+ * chamelium_port_read_captured_frame:
+ *
+ * @chamelium: The Chamelium instance to use
+ * @index: The index of the captured frame we want to get
+ * @len: How large the raw pixel dump is
+ *
+ * Retrieves a single video frame captured during the last video capture on the
+ * Chamelium. This data should be freed once the caller is done with it.
+ *
+ * The pixel data returned is in RGB888.
+ *
+ * Returns: the RGB pixel dump of the captured frame
+ */
+unsigned char *chamelium_read_captured_frame(struct chamelium *chamelium,
+					     unsigned int index,
+					     size_t *len)
+{
+	xmlrpc_value *res;
+	unsigned char *ret;
+
+	res = chamelium_rpc(chamelium, "ReadCapturedFrame", "(i)", index);
+
+	xmlrpc_read_base64(&chamelium->env, res, len, (void*)&ret);
+	xmlrpc_DECREF(res);
+
+	return ret;
+}
+
+/**
+ * chamelium_get_captured_frame_count:
+ * @chamelium: The Chamelium instance to use
+ *
+ * Gets the number of frames that were captured during the last video capture.
+ *
+ * Returns: the number of frames the Chamelium captured during the last video
+ * capture.
+ */
+int chamelium_get_captured_frame_count(struct chamelium *chamelium)
+{
+	xmlrpc_value *res;
+	int ret;
+
+	res = chamelium_rpc(chamelium, "GetCapturedFrameCount", "()");
+	xmlrpc_read_int(&chamelium->env, res, &ret);
+
+	xmlrpc_DECREF(res);
 	return ret;
 }
 

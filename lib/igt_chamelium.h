@@ -32,6 +32,7 @@
 
 struct chamelium;
 struct chamelium_port;
+struct chamelium_frame_data;
 
 struct chamelium *chamelium_init(int drm_fd);
 void chamelium_deinit(struct chamelium *chamelium);
@@ -72,6 +73,11 @@ void chamelium_port_set_ddc_state(struct chamelium *chamelium,
 void chamelium_port_get_resolution(struct chamelium *chamelium,
 				   struct chamelium_port *port,
 				   int *x, int *y);
+unsigned char *chamelium_port_dump_pixels(struct chamelium *chamelium,
+					  struct chamelium_port *port,
+					  int x, int y,
+					  int w, int h,
+					  size_t *len);
 igt_crc_t *chamelium_get_crc_for_area(struct chamelium *chamelium,
 				      struct chamelium_port *port,
 				      int x, int y, int w, int h);
@@ -79,8 +85,14 @@ void chamelium_start_capture(struct chamelium *chamelium,
 			     struct chamelium_port *port,
 			     int x, int y, int w, int h);
 void chamelium_stop_capture(struct chamelium *chamelium, int frame_count);
+void chamelium_capture(struct chamelium *chamelium, struct chamelium_port *port,
+		       int x, int y, int w, int h, int frame_count);
 igt_crc_t *chamelium_read_captured_crcs(struct chamelium *chamelium,
 					int *frame_count);
+int chamelium_get_captured_frame_count(struct chamelium *chamelium);
+unsigned char *chamelium_read_captured_frame(struct chamelium *chamelium,
+					     unsigned int index,
+					     size_t *len);
 int chamelium_get_frame_limit(struct chamelium *chamelium,
 			      struct chamelium_port *port,
 			      int w, int h);

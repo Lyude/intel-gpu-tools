@@ -39,6 +39,105 @@ typedef struct {
 
 #define HOTPLUG_TIMEOUT 20 /* seconds */
 
+/* Pre-calculated CRCs for the pattern fb, for all the modes in the default
+ * chamelium edid
+ */
+struct crc_entry {
+	int width;
+	int height;
+	igt_crc_t crc;
+};
+struct crc_table {
+	unsigned int connector_type;
+	const struct crc_entry *entries;
+	size_t len;
+};
+
+#define CRC_ENTRY(w_, h_, ...) \
+	{ w_, h_, { 1, 4, { __VA_ARGS__ } } }
+
+static const struct crc_entry pattern_fb_crcs_dp[] = {
+	CRC_ENTRY(1920, 1080, 0xb223, 0x40b1, 0xe81b, 0x856f),
+	CRC_ENTRY(1600, 1200, 0xd752, 0x313b, 0xe034, 0x8a36),
+	CRC_ENTRY(1680, 1050, 0x4284, 0xc6b6, 0x4d6a, 0x4854),
+	CRC_ENTRY(1280, 1024, 0x4118, 0xe738, 0x7fa8, 0xd6cc),
+	CRC_ENTRY(1440,  900, 0x4ba6, 0x9db8, 0x5a22, 0xa356),
+	CRC_ENTRY(1280,  960, 0x7ea9, 0x58d5, 0x06c1, 0xcd8e),
+	CRC_ENTRY(1360,  768, 0x6888, 0x805f, 0xb33c, 0x5bba),
+	CRC_ENTRY(1280,  800, 0x4fab, 0x01ba, 0xe333, 0x6e63),
+	CRC_ENTRY(1152,  864, 0xb0ad, 0x5143, 0xae08, 0xc30b),
+	CRC_ENTRY(1280,  720, 0x21c9, 0xcb46, 0x8f56, 0xfd5c),
+	CRC_ENTRY(1024,  768, 0x85e5, 0xf0cd, 0xafe3, 0x7f18),
+	CRC_ENTRY( 832,  624, 0xa968, 0x729e, 0x6768, 0x2de4),
+	CRC_ENTRY( 800,  600, 0x6b39, 0x32b6, 0x831a, 0xb03e),
+	CRC_ENTRY( 720,  480, 0x7dc6, 0xbd08, 0x0309, 0x4e6b),
+	CRC_ENTRY( 640,  480, 0xa121, 0x2473, 0xb150, 0x8c47),
+	CRC_ENTRY( 720,  400, 0xf280, 0xa7bf, 0xc20d, 0x1950),
+};
+
+static const struct crc_entry pattern_fb_crcs_hdmi[] = {
+	CRC_ENTRY(1920, 1080, 0xf859, 0xa751, 0x8c81, 0x45a1),
+	CRC_ENTRY(1600, 1200, 0xd752, 0x313b, 0xe034, 0x8a36),
+	CRC_ENTRY(1680, 1050, 0x4284, 0xc6b6, 0x4d6a, 0x4854),
+	CRC_ENTRY(1280, 1024, 0x4118, 0xe738, 0x7fa8, 0xd6cc),
+	CRC_ENTRY(1440,  900, 0x4ba6, 0x9db8, 0x5a22, 0xa356),
+	CRC_ENTRY(1280,  960, 0x7ea9, 0x58d5, 0x06c1, 0xcd8e),
+	CRC_ENTRY(1360,  768, 0x6888, 0x805f, 0xb33c, 0x5bba),
+	CRC_ENTRY(1280,  800, 0x4fab, 0x01ba, 0xe333, 0x6e63),
+	CRC_ENTRY(1152,  864, 0xb0ad, 0x5143, 0xae08, 0xc30b),
+	CRC_ENTRY(1280,  720, 0xcec2, 0x4246, 0x6cfd, 0xeb43),
+	CRC_ENTRY(1024,  768, 0x85e5, 0xf0cd, 0xafe3, 0x7f18),
+	CRC_ENTRY( 832,  624, 0xa968, 0x729e, 0x6768, 0x2de4),
+	CRC_ENTRY( 800,  600, 0x6b39, 0x32b6, 0x831a, 0xb03e),
+	CRC_ENTRY( 720,  480, 0x4306, 0xd501, 0x1eba, 0xf784),
+	CRC_ENTRY( 640,  480, 0xa121, 0x2473, 0xb150, 0x8c47),
+	CRC_ENTRY( 720,  400, 0xf280, 0xa7bf, 0xc20d, 0x1950),
+};
+#undef CRC_ENTRY
+
+static const struct crc_table crc_table[] = {
+	{
+		.connector_type = DRM_MODE_CONNECTOR_DisplayPort,
+		.entries = pattern_fb_crcs_dp,
+		.len = ARRAY_SIZE(pattern_fb_crcs_dp),
+	},
+	{
+		.connector_type = DRM_MODE_CONNECTOR_HDMIA,
+		.entries = pattern_fb_crcs_hdmi,
+		.len = ARRAY_SIZE(pattern_fb_crcs_hdmi),
+	},
+};
+
+static const igt_crc_t *
+get_precalculated_crc(struct chamelium_port *port, int w, int h)
+{
+	int i;
+	const struct crc_table *table = NULL;
+	const struct crc_entry *entry = NULL;
+
+	/* Lookup the CRC table for this type */
+	for (i = 0; i < ARRAY_SIZE(crc_table); i++) {
+		if (crc_table[i].connector_type ==
+		    chamelium_port_get_type(port)) {
+			table = &crc_table[i];
+			break;
+		}
+	}
+	if (!table)
+		return NULL;
+
+	/* Now lookup the CRC for this resolution */
+	for (i = 0; i < table->len && !entry; i++) {
+		if (table->entries[i].width == w &&
+		    table->entries[i].height == h)
+			entry = &table->entries[i];
+	}
+	if (!entry)
+		return NULL;
+
+	return &entry->crc;
+}
+
 static void
 require_connector_present(data_t *data, unsigned int type)
 {
@@ -101,6 +200,7 @@ reset_state(data_t *data, struct chamelium_port *port)
 	igt_reset_connectors();
 	chamelium_reset(data->chamelium);
 	wait_for_connector(data, port, DRM_MODE_DISCONNECTED);
+	sleep(1);
 }
 
 static void
@@ -221,41 +321,38 @@ test_suspend_resume_edid_change(data_t *data, struct chamelium_port *port,
 	igt_assert(igt_hotplug_detected(HOTPLUG_TIMEOUT));
 }
 
-static void
-test_display(data_t *data, struct chamelium_port *port)
+static igt_output_t *
+prepare_output(data_t *data,
+	       struct chamelium_port *port,
+	       igt_display_t *display)
 {
-	igt_display_t display;
 	igt_output_t *output;
-	igt_plane_t *primary;
-	struct igt_fb fb;
 	drmModeRes *res;
-	drmModeModeInfo *mode;
-	drmModeConnector *connector;
+	drmModeConnector *connector =
+		chamelium_port_get_connector(data->chamelium, port, false);
 	uint32_t crtc_id;
-	int fb_id;
+	bool found = false;
 
-	reset_state(data, port);
+	chamelium_reset(data->chamelium);
+	wait_for_connector(data, port, DRM_MODE_DISCONNECTED);
 
-	chamelium_plug(data->chamelium, port);
-	wait_for_connector(data, port, DRM_MODE_CONNECTED);
 	igt_assert(res = drmModeGetResources(data->drm_fd));
 	kmstest_unset_all_crtcs(data->drm_fd, res);
 
-	igt_display_init(&display, data->drm_fd);
+	chamelium_plug(data->chamelium, port);
+	wait_for_connector(data, port, DRM_MODE_CONNECTED);
 
-	/* Find the output struct for this connector */
-	for_each_connected_output(&display, output) {
-		connector = chamelium_port_get_connector(data->chamelium,
-							 port, false);
+	igt_display_init(display, data->drm_fd);
 
+	for_each_connected_output(display, output) {
 		if (output->config.connector->connector_id ==
-		    connector->connector_id)
+		    connector->connector_id) {
+			found = true;
 			break;
-
-		drmModeFreeConnector(connector);
-		connector = NULL;
+		}
 	}
-	igt_assert(connector);
+	igt_assert(found);
+	igt_assert(output->config.connector->count_modes);
 
 	/* Find a spare CRTC to use for the display */
 	crtc_id = kmstest_find_crtc_for_connector(data->drm_fd, res, connector,
@@ -264,28 +361,214 @@ test_display(data_t *data, struct chamelium_port *port)
 	/* Setup the display */
 	igt_output_set_pipe(output, kmstest_get_pipe_from_crtc_id(data->drm_fd,
 								  crtc_id));
-	mode = igt_output_get_mode(output);
+
+	drmModeFreeConnector(connector);
+	drmModeFreeResources(res);
+
+	return output;
+}
+
+static void
+enable_output(data_t *data,
+	      struct chamelium_port *port,
+	      igt_output_t *output,
+	      drmModeModeInfo *mode,
+	      struct igt_fb *fb)
+{
+	igt_display_t *display = output->display;
+	igt_plane_t *primary = igt_output_get_plane(output, IGT_PLANE_PRIMARY);
+	igt_assert(primary);
+
+	igt_plane_set_size(primary, mode->hdisplay, mode->vdisplay);
+	igt_plane_set_fb(primary, fb);
+	igt_output_override_mode(output, mode);
+
+	chamelium_plug(data->chamelium, port);
+	wait_for_connector(data, port, DRM_MODE_CONNECTED);
+	igt_display_commit(display);
+
+	igt_assert(chamelium_port_wait_video_input_stable(
+		data->chamelium, port, HOTPLUG_TIMEOUT));
+}
+
+static void
+disable_output(data_t *data,
+	       struct chamelium_port *port,
+	       igt_output_t *output)
+{
+	igt_display_t *display = output->display;
+	igt_plane_t *primary = igt_output_get_plane(output, IGT_PLANE_PRIMARY);
+	igt_assert(primary);
+
+	/* Disable the display */
+	igt_plane_set_fb(primary, NULL);
+	igt_display_commit(display);
+
+	chamelium_unplug(data->chamelium, port);
+	wait_for_connector(data, port, DRM_MODE_DISCONNECTED);
+}
+
+static void
+test_display_resolution(data_t *data, struct chamelium_port *port)
+{
+	igt_display_t display;
+	igt_output_t *output;
+	igt_plane_t *primary;
+	struct igt_fb fb;
+	drmModeModeInfo *mode;
+	drmModeConnector *connector;
+	int fb_id, i, x, y;
+
+	output = prepare_output(data, port, &display);
+	connector = chamelium_port_get_connector(data->chamelium, port, false);
 	primary = igt_output_get_plane(output, IGT_PLANE_PRIMARY);
 	igt_assert(primary);
 
-	fb_id = igt_create_pattern_fb(data->drm_fd,
-				      mode->hdisplay,
-				      mode->vdisplay,
-				      DRM_FORMAT_XRGB8888,
-				      LOCAL_DRM_FORMAT_MOD_NONE,
-				      &fb);
-	igt_assert(fb_id > 0);
-	igt_plane_set_fb(primary, &fb);
+	for (i = 0; i < connector->count_modes; i++) {
+		mode = &connector->modes[i];
+		fb_id = igt_create_pattern_fb(data->drm_fd,
+					      mode->hdisplay,
+					      mode->vdisplay,
+					      DRM_FORMAT_XRGB8888,
+					      LOCAL_DRM_FORMAT_MOD_NONE,
+					      &fb);
+		igt_assert(fb_id > 0);
 
-	igt_display_commit(&display);
+		enable_output(data, port, output, mode, &fb);
 
-	igt_assert(chamelium_port_wait_video_input_stable(data->chamelium,
-							  port,
-							  HOTPLUG_TIMEOUT));
+		chamelium_port_get_resolution(data->chamelium, port, &x, &y);
+		igt_assert_eq(mode->hdisplay, x);
+		igt_assert_eq(mode->vdisplay, y);
 
-	drmModeFreeResources(res);
-	drmModeFreeConnector(connector);
+		disable_output(data, port, output);
+		igt_remove_fb(data->drm_fd, &fb);
+	}
+
 	igt_display_fini(&display);
+	drmModeFreeConnector(connector);
+}
+
+static void
+test_display_crc_single(data_t *data, struct chamelium_port *port)
+{
+	igt_display_t display;
+	igt_output_t *output;
+	igt_plane_t *primary;
+	igt_crc_t *crc;
+	const igt_crc_t *expected_crc;
+	struct igt_fb fb;
+	drmModeModeInfo *mode;
+	drmModeConnector *connector;
+	int fb_id, i;
+
+	output = prepare_output(data, port, &display);
+	connector = chamelium_port_get_connector(data->chamelium, port, false);
+	primary = igt_output_get_plane(output, IGT_PLANE_PRIMARY);
+	igt_assert(primary);
+
+	for (i = 0; i < connector->count_modes; i++) {
+		mode = &connector->modes[i];
+		fb_id = igt_create_pattern_fb(data->drm_fd,
+					      mode->hdisplay,
+					      mode->vdisplay,
+					      DRM_FORMAT_XRGB8888,
+					      LOCAL_DRM_FORMAT_MOD_NONE,
+					      &fb);
+		igt_assert(fb_id > 0);
+
+		enable_output(data, port, output, mode, &fb);
+
+		expected_crc = get_precalculated_crc(port,
+						     mode->hdisplay,
+						     mode->vdisplay);
+		if (!expected_crc) {
+			igt_warn("No precalculated CRC found for %dx%d, skipping CRC check\n",
+				 mode->hdisplay, mode->vdisplay);
+			goto next;
+		}
+
+		igt_debug("Testing single CRC fetch\n");
+		crc = chamelium_get_crc_for_area(data->chamelium, port,
+						 0, 0, 0, 0);
+		igt_assert_crc_equal(crc, expected_crc);
+		free(crc);
+
+next:
+		disable_output(data, port, output);
+		igt_remove_fb(data->drm_fd, &fb);
+	}
+
+	igt_display_fini(&display);
+	drmModeFreeConnector(connector);
+}
+
+static void
+test_display_crc_multiple(data_t *data, struct chamelium_port *port)
+{
+	igt_display_t display;
+	igt_output_t *output;
+	igt_plane_t *primary;
+	igt_crc_t *crc;
+	const igt_crc_t *expected_crc;
+	struct igt_fb fb;
+	drmModeModeInfo *mode;
+	drmModeConnector *connector;
+	int fb_id, i, j, frame_cnt, captured_frame_count;
+
+	output = prepare_output(data, port, &display);
+	connector = chamelium_port_get_connector(data->chamelium, port, false);
+	primary = igt_output_get_plane(output, IGT_PLANE_PRIMARY);
+	igt_assert(primary);
+
+	for (i = 0; i < connector->count_modes; i++) {
+		mode = &connector->modes[i];
+		fb_id = igt_create_pattern_fb(data->drm_fd,
+					      mode->hdisplay,
+					      mode->vdisplay,
+					      DRM_FORMAT_XRGB8888,
+					      LOCAL_DRM_FORMAT_MOD_NONE,
+					      &fb);
+		igt_assert(fb_id > 0);
+
+		enable_output(data, port, output, mode, &fb);
+
+		expected_crc = get_precalculated_crc(port, mode->hdisplay,
+						     mode->vdisplay);
+		if (!expected_crc) {
+			igt_warn("No precalculated CRC found for %dx%d, skipping CRC check\n",
+				 mode->hdisplay, mode->vdisplay);
+			goto next;
+		}
+
+		/* We want to keep the display running for a little bit, since
+		 * there's always the potential the driver isn't able to keep
+		 * the display running properly for very long
+		 */
+		frame_cnt = min(chamelium_get_frame_limit(data->chamelium, port,
+							  mode->hdisplay,
+							  mode->vdisplay), 60);
+		chamelium_capture(data->chamelium, port, 0, 0, 0, 0, frame_cnt);
+		crc = chamelium_read_captured_crcs(data->chamelium,
+						   &captured_frame_count);
+
+		igt_debug("Captured %d frames\n", captured_frame_count);
+		for (j = 0; j < captured_frame_count; j++)
+			igt_assert_crc_equal(&crc[j], expected_crc);
+		free(crc);
+
+next:
+		disable_output(data, port, output);
+		igt_remove_fb(data->drm_fd, &fb);
+	}
+
+	igt_display_fini(&display);
+	drmModeFreeConnector(connector);
+}
+
+static void
+test_display_frame_dump(data_t *data, struct chamelium_port *port)
+{
+
 }
 
 static void
@@ -380,7 +663,13 @@ igt_main
 							edid_id, alt_edid_id);
 
 		connector_subtest("dp-display", DisplayPort)
-			test_display(&data, port);
+			test_display_resolution(&data, port);
+
+		connector_subtest("dp-display-crc-single", DisplayPort)
+			test_display_crc_single(&data, port);
+
+		connector_subtest("dp-display-crc-multiple", DisplayPort)
+			test_display_crc_multiple(&data, port);
 	}
 
 	igt_subtest_group {
@@ -422,7 +711,13 @@ igt_main
 							edid_id, alt_edid_id);
 
 		connector_subtest("hdmi-display", HDMIA)
-			test_display(&data, port);
+			test_display_resolution(&data, port);
+
+		connector_subtest("hdmi-display-crc-single", HDMIA)
+			test_display_crc_single(&data, port);
+
+		connector_subtest("hdmi-display-crc-multiple", HDMIA)
+			test_display_crc_multiple(&data, port);
 	}
 
 	igt_subtest_group {
@@ -448,8 +743,5 @@ igt_main
 
 		connector_subtest("vga-hpd-without-ddc", VGA)
 			test_hpd_without_ddc(&data, port);
-
-		connector_subtest("vga-display", VGA)
-			test_display(&data, port);
 	}
 }
