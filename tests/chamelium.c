@@ -35,9 +35,13 @@ typedef struct {
 	struct chamelium *chamelium;
 	struct chamelium_port **ports;
 	int port_count;
+
+	int edid_id;
+	int alt_edid_id;
 } data_t;
 
 #define HOTPLUG_TIMEOUT 20 /* seconds */
+#define CHAMELIUM_CHILL_TIME (700 * 1000) /* microseconds */
 
 /* Pre-calculated CRCs for the pattern fb, for all the modes in the default
  * chamelium edid
@@ -57,7 +61,8 @@ struct crc_table {
 	{ w_, h_, { 1, 4, { __VA_ARGS__ } } }
 
 static const struct crc_entry pattern_fb_crcs_dp[] = {
-	CRC_ENTRY(1920, 1080, 0xb223, 0x40b1, 0xe81b, 0x856f),
+	/*CRC_ENTRY(1920, 1080, 0xb223, 0x40b1, 0xe81b, 0x856f),*/
+	CRC_ENTRY(1920, 1080, 0xf859, 0xa751, 0x8c81, 0x45a1),
 	CRC_ENTRY(1600, 1200, 0xd752, 0x313b, 0xe034, 0x8a36),
 	CRC_ENTRY(1680, 1050, 0x4284, 0xc6b6, 0x4d6a, 0x4854),
 	CRC_ENTRY(1280, 1024, 0x4118, 0xe738, 0x7fa8, 0xd6cc),
@@ -339,6 +344,11 @@ prepare_output(data_t *data,
 	igt_assert(res = drmModeGetResources(data->drm_fd));
 	kmstest_unset_all_crtcs(data->drm_fd, res);
 
+	/* The chamelium's default EDID has a lot of resolutions, way more then
+	 * we need to test
+	 */
+	chamelium_port_set_edid(data->chamelium, port, data->edid_id);
+
 	chamelium_plug(data->chamelium, port);
 	wait_for_connector(data, port, DRM_MODE_CONNECTED);
 
@@ -382,6 +392,13 @@ enable_output(data_t *data,
 	igt_plane_set_size(primary, mode->hdisplay, mode->vdisplay);
 	igt_plane_set_fb(primary, fb);
 	igt_output_override_mode(output, mode);
+
+	/*
+	 * Unfortunately it's very easy to upset the Chamelium with quick
+	 * successive resolution changes. So cool down for a second before
+	 * turning on the display
+	 */
+	usleep(CHAMELIUM_CHILL_TIME);
 
 	chamelium_plug(data->chamelium, port);
 	wait_for_connector(data, port, DRM_MODE_CONNECTED);
@@ -619,6 +636,8 @@ igt_main
 					     igt_kms_get_base_edid());
 		alt_edid_id = chamelium_new_edid(data.chamelium,
 						 igt_kms_get_alt_edid());
+		data.edid_id = edid_id;
+		data.alt_edid_id = alt_edid_id;
 
 		/* So fbcon doesn't try to reprobe things itself */
 		kmstest_set_vt_graphics_mode();
