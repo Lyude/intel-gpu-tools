@@ -81,14 +81,9 @@ lib_source_list =	 	\
 	uwildmat/uwildmat.c	\
 	igt_kmod.c		\
 	igt_kmod.h		\
+	igt_chamelium.h		\
+	igt_chamelium.c		\
 	$(NULL)
-
-if HAVE_CHAMELIUM
-lib_source_list += igt_chamelium.h \
-		   igt_chamelium.c
-endif
-
-lib_source_list += $(NULL)
 
 .PHONY: version.h.tmp
 
