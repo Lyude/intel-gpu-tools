@@ -35,9 +35,13 @@ typedef struct {
 	struct chamelium *chamelium;
 	struct chamelium_port **ports;
 	int port_count;
+
+	int edid_id;
+	int alt_edid_id;
 } data_t;
 
 #define HOTPLUG_TIMEOUT 20 /* seconds */
+#define CHAMELIUM_CHILL_TIME (700 * 1000) /* microseconds */
 
 /* Pre-calculated CRCs for the pattern fb, for all the modes in the default
  * chamelium edid
@@ -57,7 +61,8 @@ struct crc_table {
 	{ w_, h_, { 1, 4, { __VA_ARGS__ } } }
 
 static const struct crc_entry pattern_fb_crcs_dp[] = {
-	CRC_ENTRY(1920, 1080, 0xb223, 0x40b1, 0xe81b, 0x856f),
+	/*CRC_ENTRY(1920, 1080, 0xb223, 0x40b1, 0xe81b, 0x856f),*/
+	CRC_ENTRY(1920, 1080, 0xf859, 0xa751, 0x8c81, 0x45a1),
 	CRC_ENTRY(1600, 1200, 0xd752, 0x313b, 0xe034, 0x8a36),
 	CRC_ENTRY(1680, 1050, 0x4284, 0xc6b6, 0x4d6a, 0x4854),
 	CRC_ENTRY(1280, 1024, 0x4118, 0xe738, 0x7fa8, 0xd6cc),
@@ -339,6 +344,11 @@ prepare_output(data_t *data,
 	igt_assert(res = drmModeGetResources(data->drm_fd));
 	kmstest_unset_all_crtcs(data->drm_fd, res);
 
+	/* The chamelium's default EDID has a lot of resolutions, way more then
+	 * we need to test
+	 */
+	chamelium_port_set_edid(data->chamelium, port, data->edid_id);
+
 	chamelium_plug(data->chamelium, port);
 	wait_for_connector(data, port, DRM_MODE_CONNECTED);
 
@@ -382,6 +392,13 @@ enable_output(data_t *data,
 	igt_plane_set_size(primary, mode->hdisplay, mode->vdisplay);
 	igt_plane_set_fb(primary, fb);
 	igt_output_override_mode(output, mode);
+
+	/*
+	 * Unfortunately it's very easy to upset the Chamelium with quick
+	 * successive resolution changes. So cool down for a second before
+	 * turning on the display
+	 */
+	usleep(CHAMELIUM_CHILL_TIME);
 
 	chamelium_plug(data->chamelium, port);
 	wait_for_connector(data, port, DRM_MODE_CONNECTED);
@@ -568,7 +585,58 @@ next:
 static void
 test_display_frame_dump(data_t *data, struct chamelium_port *port)
 {
+	igt_display_t display;
+	igt_output_t *output;
+	igt_plane_t *primary;
+	cairo_t *cr;
+	cairo_surface_t *reference;
+	struct igt_fb fb;
+	struct chamelium_frame_dump *frame;
+	drmModeModeInfo *mode;
+	drmModeConnector *connector;
+	int fb_id, i, j, frame_cnt;
 
+	output = prepare_output(data, port, &display);
+	connector = chamelium_port_get_connector(data->chamelium, port, false);
+	primary = igt_output_get_plane(output, IGT_PLANE_PRIMARY);
+	igt_assert(primary);
+
+	for (i = 0; i < connector->count_modes; i++) {
+		mode = &connector->modes[i];
+		fb_id = igt_create_pattern_fb(data->drm_fd,
+					      mode->hdisplay,
+					      mode->vdisplay,
+					      DRM_FORMAT_XRGB8888,
+					      LOCAL_DRM_FORMAT_MOD_NONE,
+					      &fb);
+		igt_assert(fb_id > 0);
+
+		/* Extract a cairo surface we can compare against for the fb */
+		cr = igt_get_cairo_ctx(data->drm_fd, &fb);
+		reference = cairo_get_target(cr);
+
+		enable_output(data, port, output, mode, &fb);
+
+		igt_debug("Reading frame dumps from Chamelium...\n");
+		frame_cnt = min(chamelium_get_frame_limit(data->chamelium, port,
+							  mode->hdisplay,
+							  mode->vdisplay), 30);
+		chamelium_capture(data->chamelium, port, 0, 0, 0, 0, frame_cnt);
+		for (j = 0; j < frame_cnt; j++) {
+			frame = chamelium_read_captured_frame(
+			    data->chamelium, j);
+			chamelium_assert_frame_eq(data->chamelium, frame,
+						  reference);
+			chamelium_destroy_frame_dump(frame);
+		}
+
+		disable_output(data, port, output);
+		cairo_destroy(cr);
+		igt_remove_fb(data->drm_fd, &fb);
+	}
+
+	igt_display_fini(&display);
+	drmModeFreeConnector(connector);
 }
 
 static void
@@ -619,6 +687,8 @@ igt_main
 					     igt_kms_get_base_edid());
 		alt_edid_id = chamelium_new_edid(data.chamelium,
 						 igt_kms_get_alt_edid());
+		data.edid_id = edid_id;
+		data.alt_edid_id = alt_edid_id;
 
 		/* So fbcon doesn't try to reprobe things itself */
 		kmstest_set_vt_graphics_mode();
@@ -670,6 +740,9 @@ igt_main
 
 		connector_subtest("dp-display-crc-multiple", DisplayPort)
 			test_display_crc_multiple(&data, port);
+
+		connector_subtest("dp-display-frame-dump", DisplayPort)
+			test_display_frame_dump(&data, port);
 	}
 
 	igt_subtest_group {
@@ -718,6 +791,9 @@ igt_main
 
 		connector_subtest("hdmi-display-crc-multiple", HDMIA)
 			test_display_crc_multiple(&data, port);
+
+		connector_subtest("hdmi-display-frame-dump", HDMIA)
+			test_display_frame_dump(&data, port);
 	}
 
 	igt_subtest_group {

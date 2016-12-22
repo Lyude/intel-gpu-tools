@@ -33,6 +33,7 @@ AM_CFLAGS = \
 	    $(DEBUG_CFLAGS) \
 	    $(XMLRPC_CFLAGS) \
 	    $(UDEV_CFLAGS) \
+	    $(PIXMAN_CFLAGS) \
 	    -DIGT_SRCDIR=\""$(abs_top_srcdir)/tests"\" \
 	    -DIGT_DATADIR=\""$(pkgdatadir)"\" \
 	    -DIGT_LOG_DOMAIN=\""$(subst _,-,$*)"\" \
@@ -51,5 +52,6 @@ libintel_tools_la_LIBADD = \
 	$(TIMER_LIBS) \
 	$(XMLRPC_LIBS) \
 	$(UDEV_LIBS) \
+	$(PIXMAN_LIBS) \
 	-lm
 

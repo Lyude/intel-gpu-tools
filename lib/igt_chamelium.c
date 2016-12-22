@@ -31,6 +31,7 @@
 #include <xmlrpc-c/base.h>
 #include <xmlrpc-c/client.h>
 #include <glib.h>
+#include <pixman.h>
 
 #include "igt.h"
 
@@ -86,16 +87,19 @@ struct chamelium_port {
 	char *name;
 };
 
-struct chamelium_frame_data {
-	int frame_count;
-	size_t frame_size;
-	unsigned char **frames;
+struct chamelium_frame_dump {
+	unsigned char *rgb;
+	size_t size;
+	int width;
+	int height;
 };
 
 struct chamelium {
 	xmlrpc_env env;
 	xmlrpc_client *client;
 	char *url;
+
+	char *frame_dump_dir;
 
 	int drm_fd;
 
@@ -106,7 +110,7 @@ struct chamelium {
 	struct igt_list link;
 };
 
-struct chamelium *chamelium_list;
+struct igt_list chamelium_list;
 
 /**
  * chamelium_get_ports:
@@ -188,53 +192,16 @@ const char *chamelium_port_get_name(struct chamelium_port *port)
 }
 
 /**
- * chamelium_frame_data_get_frame_count:
- * @data: The frame data to retrieve the frame count for
+ * chamelium_destroy_frame_dump:
+ * @dump: The frame dump to destroy
  *
- * Get the number of video frames contained in a pixel dump from the Chamelium.
- *
- * Returns: number of video frames in @data
+ * Destroys the given frame dump and frees all of the resources associated with
+ * it.
  */
-int chamelium_frame_data_get_frame_count(const struct chamelium_frame_data *data)
+void chamelium_destroy_frame_dump(struct chamelium_frame_dump *dump)
 {
-	return data->frame_count;
-}
-
-/**
- * chamelium_free_frame_data:
- * @data: The frame data to free
- *
- * Frees all of the resources being used by the given frame data structure.
- * This function should be called to cleanup frame dumps from the chamelium
- * once the user is done with them.
- */
-void chamelium_free_frame_data(struct chamelium_frame_data *data)
-{
-	int i;
-
-	for (i = 0; i < data->frame_count; i++)
-		free(data->frames[i]);
-
-	free(data);
-}
-
-/**
- * chamelium_frame_data_get_frame:
- * @data: The frame data from the Chamelium containing the frame we want
- * @index: The index of the frame we want to retrieve
- * @len: Where to store the length of the frame
- *
- * Retrieves the raw RGB pixel data for a frame in @data. This data need not be
- * freed.
- *
- * Returns: the raw RGB pixel data for the given frame
- */
-const unsigned char *chamelium_frame_data_get_frame(const struct chamelium_frame_data *data,
-						    unsigned int index,
-						    size_t *len)
-{
-	*len = data->frame_size;
-	return data->frames[index];
+	free(dump->rgb);
+	free(dump);
 }
 
 static xmlrpc_value *chamelium_rpc(struct chamelium *chamelium,
@@ -619,6 +586,35 @@ void chamelium_port_get_resolution(struct chamelium *chamelium,
 	xmlrpc_DECREF(res);
 }
 
+static void chamelium_get_captured_resolution(struct chamelium *chamelium,
+					      int *w, int *h)
+{
+	xmlrpc_value *res, *res_w, *res_h;
+
+	res = chamelium_rpc(chamelium, "GetCapturedResolution", "()");
+
+	xmlrpc_array_read_item(&chamelium->env, res, 0, &res_w);
+	xmlrpc_array_read_item(&chamelium->env, res, 1, &res_h);
+	xmlrpc_read_int(&chamelium->env, res_w, w);
+	xmlrpc_read_int(&chamelium->env, res_h, h);
+
+	xmlrpc_DECREF(res_w);
+	xmlrpc_DECREF(res_h);
+	xmlrpc_DECREF(res);
+}
+
+static struct chamelium_frame_dump *frame_from_xml(struct chamelium *chamelium,
+						   xmlrpc_value *frame_xml)
+{
+	struct chamelium_frame_dump *ret = malloc(sizeof(*ret));
+
+	chamelium_get_captured_resolution(chamelium, &ret->width, &ret->height);
+	xmlrpc_read_base64(&chamelium->env, frame_xml, &ret->size,
+			   (void*)&ret->rgb);
+
+	return ret;
+}
+
 /**
  * chamelium_port_dump_pixels:
  * @chamelium: The Chamelium instance to use
@@ -629,7 +625,6 @@ void chamelium_port_get_resolution(struct chamelium *chamelium,
  * screen
  * @h: The height of the area to crop the screen capture to, or 0 for the whole
  * screen
- * @len: Where to store the len of the pixel dump
  *
  * Captures the currently displayed image on the given chamelium port,
  * optionally cropped to a given region. In situations where pre-calculating
@@ -641,23 +636,22 @@ void chamelium_port_get_resolution(struct chamelium *chamelium,
  *
  * Returns: a pointer to an RGB dump of the current screen contents
  */
-unsigned char *chamelium_port_dump_pixels(struct chamelium *chamelium,
-					  struct chamelium_port *port,
-					  int x, int y,
-					  int w, int h,
-					  size_t *len)
+struct chamelium_frame_dump *chamelium_port_dump_pixels(struct chamelium *chamelium,
+							struct chamelium_port *port,
+							int x, int y,
+							int w, int h)
 {
 	xmlrpc_value *res;
-	unsigned char *ret;
+	struct chamelium_frame_dump *frame;
 
 	res = chamelium_rpc(chamelium, "DumpPixels",
-			    (w && h) ? "(iiiii)" : "(innnn)", port->id,
-			    x, y, w, h);
+			    (w && h) ? "(iiiii)" : "(innnn)",
+			    port->id, x, y, w, h);
 
-	xmlrpc_read_base64(&chamelium->env, res, len, (void*)&ret);
+	frame = frame_from_xml(chamelium, res);
 	xmlrpc_DECREF(res);
 
-	return ret;
+	return frame;
 }
 
 static void crc_from_xml(struct chamelium *chamelium,
@@ -811,28 +805,23 @@ igt_crc_t *chamelium_read_captured_crcs(struct chamelium *chamelium,
  *
  * @chamelium: The Chamelium instance to use
  * @index: The index of the captured frame we want to get
- * @len: How large the raw pixel dump is
  *
  * Retrieves a single video frame captured during the last video capture on the
- * Chamelium. This data should be freed once the caller is done with it.
+ * Chamelium. This data should be freed using #chamelium_destroy_frame_data
  *
- * The pixel data returned is in RGB888.
- *
- * Returns: the RGB pixel dump of the captured frame
+ * Returns: a chamelium_frame_data struct containing the frame dump
  */
-unsigned char *chamelium_read_captured_frame(struct chamelium *chamelium,
-					     unsigned int index,
-					     size_t *len)
+struct chamelium_frame_dump *chamelium_read_captured_frame(struct chamelium *chamelium,
+							   unsigned int index)
 {
 	xmlrpc_value *res;
-	unsigned char *ret;
+	struct chamelium_frame_dump *frame;
 
 	res = chamelium_rpc(chamelium, "ReadCapturedFrame", "(i)", index);
-
-	xmlrpc_read_base64(&chamelium->env, res, len, (void*)&ret);
+	frame = frame_from_xml(chamelium, res);
 	xmlrpc_DECREF(res);
 
-	return ret;
+	return frame;
 }
 
 /**
@@ -854,6 +843,90 @@ int chamelium_get_captured_frame_count(struct chamelium *chamelium)
 
 	xmlrpc_DECREF(res);
 	return ret;
+}
+
+/**
+ * chamelium_assert_frame_eq:
+ * @chamelium: The chamelium instance the frame dump belongs to
+ * @dump: The chamelium frame dump to check
+ * @surface: A cairo surface to compare against
+ *
+ * Asserts that the image contained in the chamelium frame dump is identical to
+ * the given surface.
+ *
+ * If the Chamelium configuration file contains the option FrameDumpDir, then
+ * this will also dump an image file of the reference image along with the
+ * frame dump for manual inspection.
+ */
+void chamelium_assert_frame_eq(const struct chamelium *chamelium,
+			       const struct chamelium_frame_dump *dump,
+			       cairo_surface_t *surface)
+{
+	pixman_image_t *reference_src, *reference_rgb;
+	int w = dump->width, h = dump->height;
+	bool eq;
+
+	/* Convert the reference image into the same format as the chamelium
+	 * image
+	 */
+	reference_src = pixman_image_create_bits(
+	    PIXMAN_a8r8g8b8, w, h, (void*)cairo_image_surface_get_data(surface),
+	    cairo_image_surface_get_stride(surface));
+	reference_rgb = pixman_image_create_bits(
+	    PIXMAN_r8g8b8, w, h, NULL, w * 3);
+
+	pixman_image_composite(PIXMAN_OP_ADD, reference_src, NULL,
+			       reference_rgb, 0, 0, 0, 0, 0, 0, 0, 0);
+	pixman_image_unref(reference_src);
+
+	/* Now do the actual comparison */
+	eq = memcmp(dump->rgb, pixman_image_get_data(reference_rgb),
+		    dump->size) == 0;
+	pixman_image_unref(reference_rgb);
+
+	if (eq)
+		return;
+
+	if (chamelium->frame_dump_dir) {
+		char path[200];
+		pixman_image_t *dump_rgb, *dump_rgba;
+		cairo_surface_t *dump_surface;
+
+		/* Dump the reference image */
+		snprintf(path, sizeof(path), "%s/%s-reference.png",
+			 chamelium->frame_dump_dir, igt_subtest_name());
+		cairo_surface_write_to_png(surface, path);
+
+		/* We have to convert the frame dump into a format cairo can
+		 * use
+		 */
+		dump_rgb = pixman_image_create_bits(
+		    PIXMAN_r8g8b8, w, h, (void*)dump->rgb, w * 3);
+		dump_rgba = pixman_image_create_bits(
+		    PIXMAN_a8r8g8b8, w, h, NULL, w * 4);
+
+		pixman_image_composite(PIXMAN_OP_ADD, dump_rgb, NULL,
+				       dump_rgba, 0, 0, 0, 0, 0, 0, 0, 0);
+		pixman_image_unref(dump_rgb);
+
+		dump_surface = cairo_image_surface_create_for_data(
+		    (void*)pixman_image_get_data(dump_rgba), CAIRO_FORMAT_RGB24,
+		    w, h, w * 4);
+
+		/* Dump the frame dump */
+		snprintf(path, sizeof(path), "%s/%s-frame-dump.png",
+			 chamelium->frame_dump_dir, igt_subtest_name());
+		cairo_surface_write_to_png(dump_surface, path);
+
+		igt_debug("Mismatched reference/frame image saved to %s\n",
+			  chamelium->frame_dump_dir);
+
+		cairo_surface_destroy(dump_surface);
+		pixman_image_unref(dump_rgba);
+	}
+
+	igt_fail_on_f(!eq,
+		      "Chamelium frame dump didn't match reference image\n");
 }
 
 /**
@@ -1018,6 +1091,15 @@ static void chamelium_read_config(struct chamelium *chamelium, int drm_fd)
 		      "Couldn't read chamelium URL from config file: %s\n",
 		      error->message);
 
+	if (g_key_file_has_key(key_file, "Chamelium", "FrameDumpDir", NULL)) {
+		chamelium->frame_dump_dir =
+			g_key_file_get_string(key_file, "Chamelium",
+					      "FrameDumpDir", &error);
+		igt_require_f(chamelium->frame_dump_dir,
+			      "Couldn't read frame dump directory from config file: %s\n",
+			      error->message);
+	}
+
 	chamelium_read_port_mappings(chamelium, drm_fd, key_file);
 
 	g_key_file_free(key_file);
@@ -1038,12 +1120,11 @@ void chamelium_reset(struct chamelium *chamelium)
 
 static void chamelium_exit_handler(int sig)
 {
-	xmlrpc_env env;
 	struct chamelium *chamelium, *tmp;
 
-	xmlrpc_env_init(&env);
+	igt_debug("Deinitializing chameliums\n");
 
-	igt_list_for_each_safe(chamelium, tmp, &chamelium_list->link, link)
+	igt_list_for_each_safe(chamelium, tmp, &chamelium_list, link)
 		chamelium_deinit(chamelium);
 }
 
@@ -1069,8 +1150,10 @@ struct chamelium *chamelium_init(int drm_fd)
 		return NULL;
 
 	memset(chamelium, 0, sizeof(*chamelium));
-	chamelium->drm_fd = drm_fd;
 	igt_list_init(&chamelium->link);
+	igt_list_add(&chamelium->link, &chamelium_list);
+
+	chamelium->drm_fd = drm_fd;
 
 	/* Setup the libxmlrpc context */
 	xmlrpc_env_init(&chamelium->env);
@@ -1087,11 +1170,6 @@ struct chamelium *chamelium_init(int drm_fd)
 	chamelium_reset(chamelium);
 
 	igt_install_exit_handler(chamelium_exit_handler);
-
-	if (!chamelium_list)
-		chamelium_list = chamelium;
-	else
-		igt_list_add(&chamelium->link, &chamelium_list->link);
 
 	return chamelium;
 
@@ -1117,6 +1195,8 @@ void chamelium_deinit(struct chamelium *chamelium)
 	int i;
 	struct chamelium_edid *pos, *tmp;
 
+	igt_list_del(&chamelium->link);
+
 	/* We want to make sure we leave all of the ports plugged in, since
 	 * testing setups requiring multiple monitors are probably using the
 	 * chamelium to provide said monitors
@@ -1139,4 +1219,15 @@ void chamelium_deinit(struct chamelium *chamelium)
 
 	free(chamelium->ports);
 	free(chamelium);
+}
+
+igt_constructor {
+	igt_list_init(&chamelium_list);
+
+	/* Frame dumps can be large, so we need to be able to handle very large
+	 * responses
+	 *
+	 * Limit here is 10MB
+	 */
+	xmlrpc_limit_set(XMLRPC_XML_SIZE_LIMIT_ID, 10485760);
 }
