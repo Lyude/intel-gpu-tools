@@ -31,11 +31,12 @@
 #include <string.h>
 
 typedef struct {
-	int drm_fd;
 	struct chamelium *chamelium;
 	struct chamelium_port **ports;
-	struct udev_monitor *mon;
 	int port_count;
+
+	struct udev_monitor *mon;
+	igt_display_t display;
 
 	int edid_id;
 	int alt_edid_id;
@@ -254,10 +255,10 @@ test_edid_read(data_t *data, struct chamelium_port *port,
 	chamelium_plug(data->chamelium, port);
 	wait_for_connector(data, port, DRM_MODE_CONNECTED);
 
-	igt_assert(kmstest_get_property(data->drm_fd, connector->connector_id,
+	igt_assert(kmstest_get_property(data->display.drm_fd, connector->connector_id,
 					DRM_MODE_OBJECT_CONNECTOR, "EDID", NULL,
 					&edid_blob_id, NULL));
-	igt_assert(edid_blob = drmModeGetPropertyBlob(data->drm_fd,
+	igt_assert(edid_blob = drmModeGetPropertyBlob(data->display.drm_fd,
 						      edid_blob_id));
 
 	/* Compare the EDID from the connector to what we expect */
@@ -329,21 +330,19 @@ test_suspend_resume_edid_change(data_t *data, struct chamelium_port *port,
 
 static igt_output_t *
 prepare_output(data_t *data,
-	       struct chamelium_port *port,
-	       igt_display_t *display)
+	       struct chamelium_port *port)
 {
 	igt_output_t *output;
 	drmModeRes *res;
 	drmModeConnector *connector =
 		chamelium_port_get_connector(data->chamelium, port, false);
-	uint32_t crtc_id;
 	bool found = false;
 
 	chamelium_reset(data->chamelium);
 	wait_for_connector(data, port, DRM_MODE_DISCONNECTED);
 
-	igt_assert(res = drmModeGetResources(data->drm_fd));
-	kmstest_unset_all_crtcs(data->drm_fd, res);
+	igt_assert(res = drmModeGetResources(data->display.drm_fd));
+	kmstest_unset_all_crtcs(data->display.drm_fd, res);
 
 	/* The chamelium's default EDID has a lot of resolutions, way more then
 	 * we need to test
@@ -353,9 +352,7 @@ prepare_output(data_t *data,
 	chamelium_plug(data->chamelium, port);
 	wait_for_connector(data, port, DRM_MODE_CONNECTED);
 
-	igt_display_init(display, data->drm_fd);
-
-	for_each_connected_output(display, output) {
+	for_each_connected_output(&data->display, output) {
 		if (output->config.connector->connector_id ==
 		    connector->connector_id) {
 			found = true;
@@ -365,13 +362,18 @@ prepare_output(data_t *data,
 	igt_assert(found);
 	igt_assert(output->config.connector->count_modes);
 
-	/* Find a spare CRTC to use for the display */
-	crtc_id = kmstest_find_crtc_for_connector(data->drm_fd, res, connector,
-						  0);
+	igt_assert(kmstest_probe_connector_config(
+		data->display.drm_fd, connector->connector_id, ~0,
+		&output->config));
+	igt_output_set_pipe(output, output->config.pipe);
 
-	/* Setup the display */
-	igt_output_set_pipe(output, kmstest_get_pipe_from_crtc_id(data->drm_fd,
-								  crtc_id));
+	/*[> Find a spare CRTC to use for the display <]*/
+	/*crtc_id = kmstest_find_crtc_for_connector(*/
+	    /*data->display.drm_fd, res, connector, 0);*/
+
+	/*[> Setup the display <]*/
+	/*igt_output_set_pipe(output, kmstest_get_pipe_from_crtc_id(data->display.drm_fd,*/
+								  /*crtc_id));*/
 
 	drmModeFreeConnector(connector);
 	drmModeFreeResources(res);
@@ -429,7 +431,6 @@ disable_output(data_t *data,
 static void
 test_display_resolution(data_t *data, struct chamelium_port *port)
 {
-	igt_display_t display;
 	igt_output_t *output;
 	igt_plane_t *primary;
 	struct igt_fb fb;
@@ -437,14 +438,14 @@ test_display_resolution(data_t *data, struct chamelium_port *port)
 	drmModeConnector *connector;
 	int fb_id, i, x, y;
 
-	output = prepare_output(data, port, &display);
+	output = prepare_output(data, port);
 	connector = chamelium_port_get_connector(data->chamelium, port, false);
 	primary = igt_output_get_plane(output, IGT_PLANE_PRIMARY);
 	igt_assert(primary);
 
 	for (i = 0; i < connector->count_modes; i++) {
 		mode = &connector->modes[i];
-		fb_id = igt_create_pattern_fb(data->drm_fd,
+		fb_id = igt_create_pattern_fb(data->display.drm_fd,
 					      mode->hdisplay,
 					      mode->vdisplay,
 					      DRM_FORMAT_XRGB8888,
@@ -459,17 +460,15 @@ test_display_resolution(data_t *data, struct chamelium_port *port)
 		igt_assert_eq(mode->vdisplay, y);
 
 		disable_output(data, port, output);
-		igt_remove_fb(data->drm_fd, &fb);
+		igt_remove_fb(data->display.drm_fd, &fb);
 	}
 
-	igt_display_fini(&display);
 	drmModeFreeConnector(connector);
 }
 
 static void
 test_display_crc_single(data_t *data, struct chamelium_port *port)
 {
-	igt_display_t display;
 	igt_output_t *output;
 	igt_plane_t *primary;
 	igt_crc_t *crc;
@@ -479,14 +478,14 @@ test_display_crc_single(data_t *data, struct chamelium_port *port)
 	drmModeConnector *connector;
 	int fb_id, i;
 
-	output = prepare_output(data, port, &display);
+	output = prepare_output(data, port);
 	connector = chamelium_port_get_connector(data->chamelium, port, false);
 	primary = igt_output_get_plane(output, IGT_PLANE_PRIMARY);
 	igt_assert(primary);
 
 	for (i = 0; i < connector->count_modes; i++) {
 		mode = &connector->modes[i];
-		fb_id = igt_create_pattern_fb(data->drm_fd,
+		fb_id = igt_create_pattern_fb(data->display.drm_fd,
 					      mode->hdisplay,
 					      mode->vdisplay,
 					      DRM_FORMAT_XRGB8888,
@@ -513,17 +512,15 @@ test_display_crc_single(data_t *data, struct chamelium_port *port)
 
 next:
 		disable_output(data, port, output);
-		igt_remove_fb(data->drm_fd, &fb);
+		igt_remove_fb(data->display.drm_fd, &fb);
 	}
 
-	igt_display_fini(&display);
 	drmModeFreeConnector(connector);
 }
 
 static void
 test_display_crc_multiple(data_t *data, struct chamelium_port *port)
 {
-	igt_display_t display;
 	igt_output_t *output;
 	igt_plane_t *primary;
 	igt_crc_t *crc;
@@ -533,14 +530,14 @@ test_display_crc_multiple(data_t *data, struct chamelium_port *port)
 	drmModeConnector *connector;
 	int fb_id, i, j, frame_cnt, captured_frame_count;
 
-	output = prepare_output(data, port, &display);
+	output = prepare_output(data, port);
 	connector = chamelium_port_get_connector(data->chamelium, port, false);
 	primary = igt_output_get_plane(output, IGT_PLANE_PRIMARY);
 	igt_assert(primary);
 
 	for (i = 0; i < connector->count_modes; i++) {
 		mode = &connector->modes[i];
-		fb_id = igt_create_pattern_fb(data->drm_fd,
+		fb_id = igt_create_pattern_fb(data->display.drm_fd,
 					      mode->hdisplay,
 					      mode->vdisplay,
 					      DRM_FORMAT_XRGB8888,
@@ -576,17 +573,15 @@ test_display_crc_multiple(data_t *data, struct chamelium_port *port)
 
 next:
 		disable_output(data, port, output);
-		igt_remove_fb(data->drm_fd, &fb);
+		igt_remove_fb(data->display.drm_fd, &fb);
 	}
 
-	igt_display_fini(&display);
 	drmModeFreeConnector(connector);
 }
 
 static void
 test_display_frame_dump(data_t *data, struct chamelium_port *port)
 {
-	igt_display_t display;
 	igt_output_t *output;
 	igt_plane_t *primary;
 	struct igt_fb fb;
@@ -595,14 +590,14 @@ test_display_frame_dump(data_t *data, struct chamelium_port *port)
 	drmModeConnector *connector;
 	int fb_id, i, j, frame_cnt;
 
-	output = prepare_output(data, port, &display);
+	output = prepare_output(data, port);
 	connector = chamelium_port_get_connector(data->chamelium, port, false);
 	primary = igt_output_get_plane(output, IGT_PLANE_PRIMARY);
 	igt_assert(primary);
 
 	for (i = 0; i < connector->count_modes; i++) {
 		mode = &connector->modes[i];
-		fb_id = igt_create_pattern_fb(data->drm_fd,
+		fb_id = igt_create_pattern_fb(data->display.drm_fd,
 					      mode->hdisplay,
 					      mode->vdisplay,
 					      DRM_FORMAT_XRGB8888,
@@ -615,7 +610,7 @@ test_display_frame_dump(data_t *data, struct chamelium_port *port)
 		igt_debug("Reading frame dumps from Chamelium...\n");
 		frame_cnt = min(chamelium_get_frame_limit(data->chamelium, port,
 							  mode->hdisplay,
-							  mode->vdisplay), 15);
+							  mode->vdisplay), 10);
 		chamelium_capture(data->chamelium, port, 0, 0, 0, 0, frame_cnt);
 		for (j = 0; j < frame_cnt; j++) {
 			frame = chamelium_read_captured_frame(
@@ -625,10 +620,9 @@ test_display_frame_dump(data_t *data, struct chamelium_port *port)
 		}
 
 		disable_output(data, port, output);
-		igt_remove_fb(data->drm_fd, &fb);
+		igt_remove_fb(data->display.drm_fd, &fb);
 	}
 
-	igt_display_fini(&display);
 	drmModeFreeConnector(connector);
 }
 
@@ -669,8 +663,9 @@ igt_main
 	igt_fixture {
 		igt_skip_on_simulation();
 
-		data.drm_fd = drm_open_driver_master(DRIVER_ANY);
-		data.chamelium = chamelium_init(data.drm_fd);
+		igt_display_init(&data.display,
+				 drm_open_driver_master(DRIVER_ANY));
+		data.chamelium = chamelium_init(&data.display);
 		igt_require(data.chamelium);
 		data.mon = igt_watch_hotplug();
 

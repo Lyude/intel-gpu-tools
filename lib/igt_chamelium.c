@@ -30,6 +30,7 @@
 #include <errno.h>
 #include <xmlrpc-c/base.h>
 #include <xmlrpc-c/client.h>
+#include <pthread.h>
 #include <glib.h>
 #include <pixman.h>
 
@@ -101,7 +102,8 @@ struct chamelium {
 
 	char *frame_dump_dir;
 
-	int drm_fd;
+	igt_display_t *display;
+	struct udev_monitor *fsm_mon;
 
 	struct chamelium_edid *edids;
 	struct chamelium_port *ports;
@@ -168,11 +170,11 @@ drmModeConnector *chamelium_port_get_connector(struct chamelium *chamelium,
 	drmModeConnector *connector;
 
 	if (reprobe)
-		connector = drmModeGetConnector(chamelium->drm_fd,
+		connector = drmModeGetConnector(chamelium->display->drm_fd,
 						port->connector_id);
 	else
-		connector = drmModeGetConnectorCurrent(chamelium->drm_fd,
-						       port->connector_id);
+		connector = drmModeGetConnectorCurrent(
+		    chamelium->display->drm_fd, port->connector_id);
 
 	return connector;
 }
@@ -204,19 +206,99 @@ void chamelium_destroy_frame_dump(struct chamelium_frame_dump *dump)
 	free(dump);
 }
 
+struct fsm_monitor_args {
+	struct chamelium *chamelium;
+	const struct chamelium_port *port;
+	struct udev_monitor *mon;
+};
+
+static void *chamelium_fsm_mon(void *data)
+{
+	struct fsm_monitor_args *args = data;
+	igt_output_t *output;
+	igt_plane_t *primary;
+	struct igt_fb *orig_fb;
+	int i;
+
+	/* Wait for the chamelium to try unplugging the connector, otherwise
+	 * the thread calling chamelium_rpc will kill us
+	 */
+	igt_hotplug_detected(args->mon, 60);
+
+	igt_debug("Chamelium needs FSM, handling\n");
+
+	/* TODO:
+	 * the output corresponding to the connector struct has it's connector
+	 * member NULLed before this gets called, making it impossible for us
+	 * to associate the connector with the output. In order to fix this, we
+	 * need to modify igt_kms.c to not do dumb shit like this
+	 */
+
+	for (i = 0; i < args->chamelium->display->n_outputs && !output; i++) {
+		output = &args->chamelium->display->outputs[i];
+
+		if (output->config.connector &&
+		    output->config.connector->connector_id ==
+		    args->port->connector_id)
+			break;
+
+		output = NULL;
+	}
+
+	/* Disable the connector and wait for a hotplug */
+	primary = igt_output_get_plane(output, IGT_PLANE_PRIMARY);
+	orig_fb = primary->fb;
+	igt_plane_set_fb(primary, NULL);
+	igt_display_commit(args->chamelium->display);
+
+	igt_assert(igt_hotplug_detected(args->chamelium->fsm_mon, 20));
+	igt_plane_set_fb(primary, orig_fb);
+	igt_display_commit(args->chamelium->display);
+
+	return NULL;
+}
+
 static xmlrpc_value *chamelium_rpc(struct chamelium *chamelium,
+				   const struct chamelium_port *fsm_port,
 				   const char *method_name,
 				   const char *format_str,
 				   ...)
 {
 	xmlrpc_value *res;
 	va_list va_args;
+	struct fsm_monitor_args monitor_args;
+	pthread_t fsm_thread_id;
+
+	/* Cleanup the last error, if any */
+	if (chamelium->env.fault_occurred) {
+		xmlrpc_env_clean(&chamelium->env);
+		xmlrpc_env_init(&chamelium->env);
+	}
+
+	/* Unfortunately xmlrpc_client's event loop helpers are rather useless
+	 * for implementing any sort of event loop, since they provide no way
+	 * to poll for events other then the RPC response. This means in order
+	 * to handle the chamelium attempting FSM, we have to fork into another
+	 * thread and have that handle hotplugging displays
+	 */
+	if (fsm_port) {
+		monitor_args.chamelium = chamelium;
+		monitor_args.port = fsm_port;
+		monitor_args.mon = igt_watch_hotplug();
+		pthread_create(&fsm_thread_id, NULL, chamelium_fsm_mon,
+			       &monitor_args);
+	}
 
 	va_start(va_args, format_str);
 	xmlrpc_client_call2f_va(&chamelium->env, chamelium->client,
 				chamelium->url, method_name, format_str, &res,
 				va_args);
 	va_end(va_args);
+
+	if (fsm_port) {
+		pthread_cancel(fsm_thread_id);
+		igt_cleanup_hotplug(monitor_args.mon);
+	}
 
 	igt_assert_f(!chamelium->env.fault_occurred,
 		     "Chamelium RPC call failed: %s\n",
@@ -236,7 +318,7 @@ static xmlrpc_value *chamelium_rpc(struct chamelium *chamelium,
 void chamelium_plug(struct chamelium *chamelium, struct chamelium_port *port)
 {
 	igt_debug("Plugging %s\n", port->name);
-	xmlrpc_DECREF(chamelium_rpc(chamelium, "Plug", "(i)", port->id));
+	xmlrpc_DECREF(chamelium_rpc(chamelium, NULL, "Plug", "(i)", port->id));
 }
 
 /**
@@ -250,7 +332,8 @@ void chamelium_plug(struct chamelium *chamelium, struct chamelium_port *port)
 void chamelium_unplug(struct chamelium *chamelium, struct chamelium_port *port)
 {
 	igt_debug("Unplugging port %s\n", port->name);
-	xmlrpc_DECREF(chamelium_rpc(chamelium, "Unplug", "(i)", port->id));
+	xmlrpc_DECREF(chamelium_rpc(chamelium, NULL, "Unplug", "(i)",
+				    port->id));
 }
 
 /**
@@ -269,7 +352,7 @@ bool chamelium_is_plugged(struct chamelium *chamelium,
 	xmlrpc_value *res;
 	xmlrpc_bool is_plugged;
 
-	res = chamelium_rpc(chamelium, "IsPlugged", "(i)", port->id);
+	res = chamelium_rpc(chamelium, NULL, "IsPlugged", "(i)", port->id);
 
 	xmlrpc_read_bool(&chamelium->env, res, &is_plugged);
 	xmlrpc_DECREF(res);
@@ -298,7 +381,7 @@ bool chamelium_port_wait_video_input_stable(struct chamelium *chamelium,
 
 	igt_debug("Waiting for video input to stabalize on %s\n", port->name);
 
-	res = chamelium_rpc(chamelium, "WaitVideoInputStable", "(ii)",
+	res = chamelium_rpc(chamelium, port, "WaitVideoInputStable", "(ii)",
 			    port->id, timeout_secs);
 
 	xmlrpc_read_bool(&chamelium->env, res, &is_on);
@@ -338,8 +421,8 @@ void chamelium_fire_hpd_pulses(struct chamelium *chamelium,
 	for (i = 0; i < count; i++)
 		xmlrpc_array_append_item(&chamelium->env, pulse_widths, width);
 
-	xmlrpc_DECREF(chamelium_rpc(chamelium, "FireMixedHpdPulses", "(iA)",
-				    port->id, pulse_widths));
+	xmlrpc_DECREF(chamelium_rpc(chamelium, NULL, "FireMixedHpdPulses",
+				    "(iA)", port->id, pulse_widths));
 
 	xmlrpc_DECREF(width);
 	xmlrpc_DECREF(pulse_widths);
@@ -372,8 +455,8 @@ void chamelium_fire_mixed_hpd_pulses(struct chamelium *chamelium,
 	}
 	va_end(args);
 
-	xmlrpc_DECREF(chamelium_rpc(chamelium, "FireMixedHpdPulses", "(iA)",
-				    port->id, pulse_widths));
+	xmlrpc_DECREF(chamelium_rpc(chamelium, NULL, "FireMixedHpdPulses",
+				    "(iA)", port->id, pulse_widths));
 
 	xmlrpc_DECREF(pulse_widths);
 }
@@ -466,7 +549,8 @@ int chamelium_new_edid(struct chamelium *chamelium, const unsigned char *edid)
 	struct chamelium_edid *allocated_edid;
 	int edid_id;
 
-	res = chamelium_rpc(chamelium, "CreateEdid", "(6)", edid, EDID_LENGTH);
+	res = chamelium_rpc(chamelium, NULL, "CreateEdid", "(6)",
+			    edid, EDID_LENGTH);
 
 	xmlrpc_read_int(&chamelium->env, res, &edid_id);
 	xmlrpc_DECREF(res);
@@ -488,7 +572,8 @@ int chamelium_new_edid(struct chamelium *chamelium, const unsigned char *edid)
 
 static void chamelium_destroy_edid(struct chamelium *chamelium, int edid_id)
 {
-	xmlrpc_DECREF(chamelium_rpc(chamelium, "DestroyEdid", "(i)", edid_id));
+	xmlrpc_DECREF(chamelium_rpc(chamelium, NULL, "DestroyEdid", "(i)",
+				    edid_id));
 }
 
 /**
@@ -507,7 +592,7 @@ static void chamelium_destroy_edid(struct chamelium *chamelium, int edid_id)
 void chamelium_port_set_edid(struct chamelium *chamelium,
 			     struct chamelium_port *port, int edid_id)
 {
-	xmlrpc_DECREF(chamelium_rpc(chamelium, "ApplyEdid", "(ii)",
+	xmlrpc_DECREF(chamelium_rpc(chamelium, NULL, "ApplyEdid", "(ii)",
 				    port->id, edid_id));
 }
 
@@ -529,7 +614,7 @@ void chamelium_port_set_ddc_state(struct chamelium *chamelium,
 	igt_debug("%sabling DDC bus on %s\n",
 		  enabled ? "En" : "Dis", port->name);
 
-	xmlrpc_DECREF(chamelium_rpc(chamelium, "SetDdcState", "(ib)",
+	xmlrpc_DECREF(chamelium_rpc(chamelium, NULL, "SetDdcState", "(ib)",
 				    port->id, enabled));
 }
 
@@ -549,7 +634,7 @@ bool chamelium_port_get_ddc_state(struct chamelium *chamelium,
 	xmlrpc_value *res;
 	xmlrpc_bool enabled;
 
-	res = chamelium_rpc(chamelium, "IsDdcEnabled", "(i)", port->id);
+	res = chamelium_rpc(chamelium, NULL, "IsDdcEnabled", "(i)", port->id);
 	xmlrpc_read_bool(&chamelium->env, res, &enabled);
 
 	xmlrpc_DECREF(res);
@@ -574,7 +659,8 @@ void chamelium_port_get_resolution(struct chamelium *chamelium,
 {
 	xmlrpc_value *res, *res_x, *res_y;
 
-	res = chamelium_rpc(chamelium, "DetectResolution", "(i)", port->id);
+	res = chamelium_rpc(chamelium, port, "DetectResolution", "(i)",
+			    port->id);
 
 	xmlrpc_array_read_item(&chamelium->env, res, 0, &res_x);
 	xmlrpc_array_read_item(&chamelium->env, res, 1, &res_y);
@@ -591,7 +677,7 @@ static void chamelium_get_captured_resolution(struct chamelium *chamelium,
 {
 	xmlrpc_value *res, *res_w, *res_h;
 
-	res = chamelium_rpc(chamelium, "GetCapturedResolution", "()");
+	res = chamelium_rpc(chamelium, NULL, "GetCapturedResolution", "()");
 
 	xmlrpc_array_read_item(&chamelium->env, res, 0, &res_w);
 	xmlrpc_array_read_item(&chamelium->env, res, 1, &res_h);
@@ -644,7 +730,7 @@ struct chamelium_frame_dump *chamelium_port_dump_pixels(struct chamelium *chamel
 	xmlrpc_value *res;
 	struct chamelium_frame_dump *frame;
 
-	res = chamelium_rpc(chamelium, "DumpPixels",
+	res = chamelium_rpc(chamelium, port, "DumpPixels",
 			    (w && h) ? "(iiiii)" : "(innnn)",
 			    port->id, x, y, w, h);
 
@@ -693,7 +779,7 @@ igt_crc_t *chamelium_get_crc_for_area(struct chamelium *chamelium,
 	xmlrpc_value *res;
 	igt_crc_t *ret = malloc(sizeof(igt_crc_t));;
 
-	res = chamelium_rpc(chamelium, "ComputePixelChecksum",
+	res = chamelium_rpc(chamelium, port, "ComputePixelChecksum",
 			    (w && h) ? "(iiiii)" : "(innnn)",
 			    port->id, x, y, w, h);
 
@@ -721,7 +807,7 @@ igt_crc_t *chamelium_get_crc_for_area(struct chamelium *chamelium,
 void chamelium_start_capture(struct chamelium *chamelium,
 			     struct chamelium_port *port, int x, int y, int w, int h)
 {
-	xmlrpc_DECREF(chamelium_rpc(chamelium, "StartCapturingVideo",
+	xmlrpc_DECREF(chamelium_rpc(chamelium, port, "StartCapturingVideo",
 				    (w && h) ? "(iiiii)" : "(innnn)",
 				    port->id, x, y, w, h));
 }
@@ -738,8 +824,8 @@ void chamelium_start_capture(struct chamelium *chamelium,
  */
 void chamelium_stop_capture(struct chamelium *chamelium, int frame_count)
 {
-	xmlrpc_DECREF(chamelium_rpc(chamelium, "StopCapturingVideo", "(i)",
-				    frame_count));
+	xmlrpc_DECREF(chamelium_rpc(chamelium, NULL, "StopCapturingVideo",
+				    "(i)", frame_count));
 }
 
 /**
@@ -760,7 +846,7 @@ void chamelium_stop_capture(struct chamelium *chamelium, int frame_count)
 void chamelium_capture(struct chamelium *chamelium, struct chamelium_port *port,
 		       int x, int y, int w, int h, int frame_count)
 {
-	xmlrpc_DECREF(chamelium_rpc(chamelium, "CaptureVideo",
+	xmlrpc_DECREF(chamelium_rpc(chamelium, port, "CaptureVideo",
 				    (w && h) ? "(iiiiii)" : "(iinnnn)",
 				    port->id, frame_count, x, y, w, h));
 }
@@ -781,7 +867,7 @@ igt_crc_t *chamelium_read_captured_crcs(struct chamelium *chamelium,
 	xmlrpc_value *res, *elem;
 	int i;
 
-	res = chamelium_rpc(chamelium, "GetCapturedChecksums", "(in)", 0);
+	res = chamelium_rpc(chamelium, NULL, "GetCapturedChecksums", "(in)", 0);
 
 	*frame_count = xmlrpc_array_size(&chamelium->env, res);
 	ret = calloc(sizeof(igt_crc_t), *frame_count);
@@ -817,7 +903,7 @@ struct chamelium_frame_dump *chamelium_read_captured_frame(struct chamelium *cha
 	xmlrpc_value *res;
 	struct chamelium_frame_dump *frame;
 
-	res = chamelium_rpc(chamelium, "ReadCapturedFrame", "(i)", index);
+	res = chamelium_rpc(chamelium, NULL, "ReadCapturedFrame", "(i)", index);
 	frame = frame_from_xml(chamelium, res);
 	xmlrpc_DECREF(res);
 
@@ -838,7 +924,7 @@ int chamelium_get_captured_frame_count(struct chamelium *chamelium)
 	xmlrpc_value *res;
 	int ret;
 
-	res = chamelium_rpc(chamelium, "GetCapturedFrameCount", "()");
+	res = chamelium_rpc(chamelium, NULL, "GetCapturedFrameCount", "()");
 	xmlrpc_read_int(&chamelium->env, res, &ret);
 
 	xmlrpc_DECREF(res);
@@ -869,7 +955,7 @@ void chamelium_assert_frame_eq(const struct chamelium *chamelium,
 	bool eq;
 
 	/* Get the cairo surface for the framebuffer */
-	cr = igt_get_cairo_ctx(chamelium->drm_fd, fb);
+	cr = igt_get_cairo_ctx(chamelium->display->drm_fd, fb);
 	fb_surface = cairo_get_target(cr);
 	cairo_surface_reference(fb_surface);
 	cairo_destroy(cr);
@@ -959,7 +1045,7 @@ int chamelium_get_frame_limit(struct chamelium *chamelium, struct chamelium_port
 	if (!w && !h)
 		chamelium_port_get_resolution(chamelium, port, &w, &h);
 
-	res = chamelium_rpc(chamelium, "GetMaxFrameLimit", "(iii)",
+	res = chamelium_rpc(chamelium, port, "GetMaxFrameLimit", "(iii)",
 			    port->id, w, h);
 
 	xmlrpc_read_int(&chamelium->env, res, &ret);
@@ -975,7 +1061,8 @@ static unsigned int chamelium_get_port_type(struct chamelium *chamelium,
 	const char *port_type_str;
 	unsigned int port_type;
 
-	res = chamelium_rpc(chamelium, "GetConnectorType", "(i)", port->id);
+	res = chamelium_rpc(chamelium, NULL, "GetConnectorType",
+			    "(i)", port->id);
 
 	xmlrpc_read_string(&chamelium->env, res, &port_type_str);
 	igt_debug("Port %d is of type '%s'\n", port->id, port_type_str);
@@ -1122,7 +1209,7 @@ static void chamelium_read_config(struct chamelium *chamelium, int drm_fd)
 void chamelium_reset(struct chamelium *chamelium)
 {
 	igt_debug("Resetting the chamelium\n");
-	xmlrpc_DECREF(chamelium_rpc(chamelium, "Reset", "()"));
+	xmlrpc_DECREF(chamelium_rpc(chamelium, NULL, "Reset", "()"));
 }
 
 static void chamelium_exit_handler(int sig)
@@ -1138,7 +1225,7 @@ static void chamelium_exit_handler(int sig)
 /**
  * chamelium_init:
  * @chamelium: The Chamelium instance to use
- * @drm_fd: drm file descriptor
+ * @drm_fd: a display initialized with #igt_display_init
  *
  * Sets up a connection with a chamelium, using the URL specified in the
  * Chamelium configuration. This must be called first before trying to use the
@@ -1149,7 +1236,7 @@ static void chamelium_exit_handler(int sig)
  *
  * Returns: A newly initialized chamelium struct, or NULL on error
  */
-struct chamelium *chamelium_init(int drm_fd)
+struct chamelium *chamelium_init(igt_display_t *display)
 {
 	struct chamelium *chamelium = malloc(sizeof(struct chamelium));
 
@@ -1159,8 +1246,7 @@ struct chamelium *chamelium_init(int drm_fd)
 	memset(chamelium, 0, sizeof(*chamelium));
 	igt_list_init(&chamelium->link);
 	igt_list_add(&chamelium->link, &chamelium_list);
-
-	chamelium->drm_fd = drm_fd;
+	chamelium->display = display;
 
 	/* Setup the libxmlrpc context */
 	xmlrpc_env_init(&chamelium->env);
@@ -1173,7 +1259,7 @@ struct chamelium *chamelium_init(int drm_fd)
 		goto error;
 	}
 
-	chamelium_read_config(chamelium, drm_fd);
+	chamelium_read_config(chamelium, display->drm_fd);
 	chamelium_reset(chamelium);
 
 	igt_install_exit_handler(chamelium_exit_handler);

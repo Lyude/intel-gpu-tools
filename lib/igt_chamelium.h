@@ -34,7 +34,7 @@ struct chamelium;
 struct chamelium_port;
 struct chamelium_frame_dump;
 
-struct chamelium *chamelium_init(int drm_fd);
+struct chamelium *chamelium_init(igt_display_t *display);
 void chamelium_deinit(struct chamelium *chamelium);
 void chamelium_reset(struct chamelium *chamelium);
 
