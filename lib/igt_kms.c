@@ -1566,7 +1566,13 @@ void igt_display_fini(igt_display_t *display)
 	display->outputs = NULL;
 }
 
-static void igt_display_refresh(igt_display_t *display)
+/**
+ * igt_display_refresh:
+ * @display: a pointer to an #igt_display_t structure
+ *
+ * Reprobe all outputs associated with the given display.
+ */
+void igt_display_refresh(igt_display_t *display)
 {
 	int i, j;
 
