@@ -352,6 +352,7 @@ prepare_output(data_t *data,
 	chamelium_plug(data->chamelium, port);
 	wait_for_connector(data, port, DRM_MODE_CONNECTED);
 
+	igt_display_refresh(&data->display);
 	for_each_connected_output(&data->display, output) {
 		if (output->config.connector->connector_id ==
 		    connector->connector_id) {
@@ -366,14 +367,6 @@ prepare_output(data_t *data,
 		data->display.drm_fd, connector->connector_id, ~0,
 		&output->config));
 	igt_output_set_pipe(output, output->config.pipe);
-
-	/*[> Find a spare CRTC to use for the display <]*/
-	/*crtc_id = kmstest_find_crtc_for_connector(*/
-	    /*data->display.drm_fd, res, connector, 0);*/
-
-	/*[> Setup the display <]*/
-	/*igt_output_set_pipe(output, kmstest_get_pipe_from_crtc_id(data->display.drm_fd,*/
-								  /*crtc_id));*/
 
 	drmModeFreeConnector(connector);
 	drmModeFreeResources(res);
